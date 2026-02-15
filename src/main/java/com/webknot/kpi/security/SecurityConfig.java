@@ -29,6 +29,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/**").permitAll()
                         .requestMatchers("/employees/**").permitAll()
+                        .requestMatchers("/submission-window/**").permitAll()
                         .requestMatchers("/kpi-definitions/**").permitAll()
                         .requestMatchers("/portal/employee/**").hasRole("Employee")
                         .requestMatchers("/portal/manager/**").hasRole("Manager")
