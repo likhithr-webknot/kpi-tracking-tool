@@ -55,8 +55,6 @@ public class SubmissionCycle {
         updatedAt = OffsetDateTime.now();
     }
 
-    // getters/setters
-
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
 

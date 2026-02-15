@@ -18,10 +18,6 @@ public enum CurrentBand {
     B1
     ;
 
-    /**
-     * Returns the next higher band (i.e., a promotion of exactly one band).
-     * If the current band is already the highest, returns {@link Optional#empty()}.
-     */
     public Optional<CurrentBand> oneBandAbove() {
         return switch (this) {
             case B8 -> Optional.of(B7L);

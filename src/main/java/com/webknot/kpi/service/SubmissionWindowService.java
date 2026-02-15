@@ -5,6 +5,8 @@ import com.webknot.kpi.dto.ScheduleWindowRequest;
 import com.webknot.kpi.dto.SubmissionWindowResponse;
 import com.webknot.kpi.models.SubmissionCycle;
 import com.webknot.kpi.repository.SubmissionCycleRepository;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +22,7 @@ public class SubmissionWindowService {
 
     private final SubmissionCycleRepository repo;
     private final Clock clock;
+    private final Logger log = LogManager.getLogger(SubmissionWindowService.class);
 
     @Autowired
     public SubmissionWindowService(SubmissionCycleRepository repo) {
@@ -34,6 +37,7 @@ public class SubmissionWindowService {
     public SubmissionWindowResponse getCurrentWindow() {
         SubmissionCycle cycle = getOrCreateCurrentCycle(DEFAULT_TZ);
         OffsetDateTime now = OffsetDateTime.now(clock);
+        log.info("Current submission window fetched for cycle: {}", cycle.getCycleKey());
         return toResponse(cycle, now);
     }
 
@@ -50,6 +54,7 @@ public class SubmissionWindowService {
         cycle.setUpdatedBy(actorEmployeeId);
 
         repo.save(cycle);
+        log.info("Submission window scheduled for cycle: {}", cycle.getCycleKey());
 
         OffsetDateTime now = OffsetDateTime.now(clock);
         return toResponse(cycle, now);
@@ -66,6 +71,7 @@ public class SubmissionWindowService {
         cycle.setUpdatedBy(actorEmployeeId);
 
         repo.save(cycle);
+        log.info("Submission window opened immediately for cycle: {}", cycle.getCycleKey());
         return toResponse(cycle, now);
     }
 
@@ -74,12 +80,12 @@ public class SubmissionWindowService {
         SubmissionCycle cycle = getOrCreateCurrentCycle(DEFAULT_TZ);
         OffsetDateTime now = OffsetDateTime.now(clock);
 
-        // Close immediately and keep it closed until admin reopens/schedules
         cycle.setWindowEndAt(now);
         cycle.setManualClosed(true);
         cycle.setUpdatedBy(actorEmployeeId);
 
         repo.save(cycle);
+        log.info("Submission window closed immediately for cycle: {}", cycle.getCycleKey());
         return toResponse(cycle, now);
     }
 
@@ -101,7 +107,6 @@ public class SubmissionWindowService {
             created.setCycleKey(cycleKey);
             created.setTimezone(timezone);
 
-            // Safe default: start/end set, but keep closed until admin opens/schedules.
             OffsetDateTime now = OffsetDateTime.now(clock);
             OffsetDateTime start = defaultStartAt(now, timezone);
             OffsetDateTime end = start.plusDays(1);
@@ -110,6 +115,7 @@ public class SubmissionWindowService {
             created.setWindowEndAt(end);
             created.setManualClosed(true);
 
+            log.info("Created default submission cycle: {}", cycleKey);
             return repo.save(created);
         });
     }
