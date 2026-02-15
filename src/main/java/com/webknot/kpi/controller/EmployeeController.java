@@ -92,6 +92,28 @@ public class EmployeeController {
         }
     }
 
+    @PostMapping("/{id}/promote")
+    public ResponseEntity<?> promoteEmployee(@PathVariable("id") String id) {
+        try {
+            Employee employee = employeeService.promoteEmployee(id).orElse(null);
+            if (employee == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Employee not found: " + id);
+            }
+
+            log.info("Successfully promoted employee with ID: " + id);
+            return ResponseEntity.status(HttpStatus.OK).body(toResponse(employee));
+        } catch (CrudOperationException e) {
+            log.error("Error while promoting employee: " + e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
+        } catch (CrudValidationException e) {
+            log.error("Validation error while promoting employee: " + e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
+        } catch (Exception e) {
+            log.error("Unexpected error while promoting employee: " + e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
+        }
+    }
+
     private static EmployeeResponse toResponse(Employee e) {
         return new EmployeeResponse(
                 e.getEmployeeId(),

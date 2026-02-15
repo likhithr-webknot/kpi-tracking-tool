@@ -1,6 +1,9 @@
 package com.webknot.kpi.models;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcType;
+import org.hibernate.dialect.type.PostgreSQLEnumJdbcType;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.LocalDateTime;
 
@@ -18,7 +21,12 @@ public class Employee {
     @Column(name = "email", unique = true, nullable = false, length = 255)
     private String email;
 
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    @Column(name = "password", nullable = false, length = 255)
+    private String password;
+
     @Enumerated(EnumType.STRING)
+    @JdbcType(PostgreSQLEnumJdbcType.class)
     @Column(name = "emp_role", columnDefinition = "dev.employee_role")
     private EmployeeRole empRole = EmployeeRole.Employee;
 
@@ -26,6 +34,7 @@ public class Employee {
     private String stream;
 
     @Enumerated(EnumType.STRING)
+    @JdbcType(PostgreSQLEnumJdbcType.class)
     @Column(name = "band", columnDefinition = "dev.current_band", nullable = false)
     private CurrentBand band = CurrentBand.B8;
 
@@ -92,6 +101,14 @@ public class Employee {
         this.email = email;
     }
 
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
+
     public EmployeeRole getEmpRole() {
         return empRole;
     }
@@ -146,6 +163,22 @@ public class Employee {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    @PrePersist
+    public void prePersist() {
+        LocalDateTime now = LocalDateTime.now();
+        if (createdAt == null) {
+            createdAt = now;
+        }
+        if (updatedAt == null) {
+            updatedAt = now;
+        }
+    }
+
+    @PreUpdate
+    public void preUpdate() {
+        updatedAt = LocalDateTime.now();
     }
 
     @Override

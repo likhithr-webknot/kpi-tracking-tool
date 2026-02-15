@@ -5,6 +5,8 @@ import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import org.hibernate.annotations.JdbcType;
+import org.hibernate.dialect.type.PostgreSQLEnumJdbcType;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -27,11 +29,13 @@ public class KpiDefinition {
 
     @NotNull
     @Enumerated(EnumType.STRING)
+    @JdbcType(PostgreSQLEnumJdbcType.class)
     @Column(name = "band", nullable = false, columnDefinition = "dev.current_band")
     private CurrentBand band;
 
     @NotNull
     @Enumerated(EnumType.STRING)
+    @JdbcType(PostgreSQLEnumJdbcType.class)
     @Column(name = "stream", nullable = false, columnDefinition = "dev.current_stream")
     private CurrentStream stream;
 
@@ -41,7 +45,7 @@ public class KpiDefinition {
 
     @NotNull
     @DecimalMin(value = "0.0000001", inclusive = true)
-    @DecimalMax(value = "1.00", inclusive = true)
+    @DecimalMax(value = "100.00", inclusive = true)
     @Column(name = "weightage", nullable = false, precision = 5, scale = 2)
     private BigDecimal weightage;
 
@@ -90,6 +94,13 @@ public class KpiDefinition {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    @PrePersist
+    public void prePersist() {
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+    }
 
     @Override
     public String toString() {

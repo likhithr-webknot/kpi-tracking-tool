@@ -72,6 +72,10 @@ public class CrudValidationException extends RuntimeException {
         if (hasViolations()) {
             for(Object violation : violations) {
                 ConstraintViolation<?> someViolation = (ConstraintViolation<?>) violation;
+                if (someViolation.getPropertyPath() != null) {
+                    buffer.append(someViolation.getPropertyPath());
+                    buffer.append(": ");
+                }
                 buffer.append(someViolation.getMessage());
                 buffer.append(";");
             }

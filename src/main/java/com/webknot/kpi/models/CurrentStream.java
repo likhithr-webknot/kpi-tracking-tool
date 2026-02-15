@@ -1,9 +1,9 @@
 package com.webknot.kpi.models;
 
 public enum CurrentStream {
-    ENG,
+    Development,
     QA,
-    DEVOPS,
+    Devops,
     DATA,
     UI_UX
 }

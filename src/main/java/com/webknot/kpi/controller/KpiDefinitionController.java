@@ -26,6 +26,13 @@ public class KpiDefinitionController {
         this.kpiDefinitionService = kpiDefinitionService;
     }
 
+    private String toValidationResponse(CrudValidationException e) {
+        if (e.hasViolations()) {
+            return e.getViolationsAsString();
+        }
+        return e.getMessage();
+    }
+
     @GetMapping("/getall")
     public ResponseEntity<?> getAll() {
         try {
@@ -76,15 +83,16 @@ public class KpiDefinitionController {
             }
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMessage);
         } catch (CrudValidationException e) {
-            log.error("Validation error while adding KPI definition: " + e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
+            String validationDetails = toValidationResponse(e);
+            log.error("Validation error while adding KPI definition: " + validationDetails, e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(validationDetails);
         } catch (Exception e) {
             log.error("Unexpected error while adding KPI definition: " + e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error: " + e.getMessage());
         }
     }
 
-    @PutMapping("/update")
+    @RequestMapping(value = "/update", method = {RequestMethod.PUT, RequestMethod.POST})
     public ResponseEntity<?> update(@RequestBody KpiDefinition def) {
         try {
             KpiDefinition updated = kpiDefinitionService.update(def);
@@ -94,8 +102,9 @@ public class KpiDefinitionController {
             log.error("Error while updating KPI definition: " + e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
         } catch (CrudValidationException e) {
-            log.error("Validation error while updating KPI definition: " + e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
+            String validationDetails = toValidationResponse(e);
+            log.error("Validation error while updating KPI definition: " + validationDetails, e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(validationDetails);
         } catch (Exception e) {
             log.error("Unexpected error while updating KPI definition: " + e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());

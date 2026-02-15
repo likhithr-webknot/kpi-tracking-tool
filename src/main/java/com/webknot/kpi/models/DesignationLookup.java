@@ -1,6 +1,9 @@
 package com.webknot.kpi.models;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcType;
+import org.hibernate.dialect.type.PostgreSQLEnumJdbcType;
+
 import java.io.Serializable;
 import java.util.Objects;
 
@@ -28,6 +31,7 @@ public class DesignationLookup {
 
 
         @Enumerated(EnumType.STRING)
+        @JdbcType(PostgreSQLEnumJdbcType.class)
         @Column(name = "band", columnDefinition = "dev.current_band")
         private CurrentBand band;
 
