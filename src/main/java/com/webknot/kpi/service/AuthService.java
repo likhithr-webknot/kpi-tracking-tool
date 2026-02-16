@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Map;
@@ -109,7 +110,45 @@ public class AuthService {
         log.info("Password reset successful for email: {}", employee.getEmail());
     }
 
+    @Transactional(readOnly = true)
+    public MeResponse getCurrentUser(String email) {
+        Employee employee = employeeRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        EmployeeRole role = employee.getEmpRole() != null ? employee.getEmpRole() : EmployeeRole.Employee;
+        String portal = switch (role) {
+            case Admin -> "/portal/admin";
+            case Manager -> "/portal/manager";
+            case Employee -> "/portal/employee";
+        };
+        return new MeResponse(
+                employee.getEmployeeId(),
+                employee.getEmployeeName(),
+                employee.getEmail(),
+                role.name(),
+                employee.getStream(),
+                employee.getBand() != null ? employee.getBand().name() : null,
+                employee.getManager() != null ? employee.getManager().getEmployeeId() : null,
+                employee.getUpdatedBy() != null ? employee.getUpdatedBy().getEmployeeId() : null,
+                employee.getCreatedAt(),
+                employee.getUpdatedAt(),
+                portal
+        );
+    }
+
     public record AuthResult(String accessToken, String role, String portal) {}
     public record ForgotPasswordResult(String message, String resetToken, Instant expiresAt) {}
+    public record MeResponse(
+            String employeeId,
+            String employeeName,
+            String email,
+            String role,
+            String stream,
+            String band,
+            String managerId,
+            String updatedById,
+            java.time.LocalDateTime createdAt,
+            java.time.LocalDateTime updatedAt,
+            String portal
+    ) {}
     private record ResetTokenData(String email, Instant expiresAt) {}
 }
