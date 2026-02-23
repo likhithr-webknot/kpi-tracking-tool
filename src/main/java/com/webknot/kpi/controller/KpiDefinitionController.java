@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Optional;
 
 @RestController
-@RequestMapping("/kpi-definitions")
+@RequestMapping({"/kpi-definitions", "/kpi-definition"})
 public class KpiDefinitionController {
 
     private final KpiDefinitionService kpiDefinitionService;

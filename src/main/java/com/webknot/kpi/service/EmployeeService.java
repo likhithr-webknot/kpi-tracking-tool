@@ -5,6 +5,7 @@ import com.webknot.kpi.exceptions.CrudValidationErrorCode;
 import com.webknot.kpi.exceptions.CrudValidationException;
 import com.webknot.kpi.models.DesignationLookup;
 import com.webknot.kpi.models.Employee;
+import com.webknot.kpi.models.EmployeeRole;
 import com.webknot.kpi.repository.DesignationLookupRepository;
 import com.webknot.kpi.repository.EmployeeRepository;
 import jakarta.validation.ConstraintViolation;
@@ -159,6 +160,57 @@ public class EmployeeService {
             throw e;
         } catch (Exception e) {
             throw CrudOperationException.asFailedAddOperation(Employee.class, e);
+        }
+    }
+
+    @Transactional
+    public Employee addEmployeeWithManager(Employee employee, String managerId, String defaultPassword) {
+        if (employee == null) {
+            throw CrudOperationException.asNullEntity(Employee.class);
+        }
+
+        if (employee.getEmpRole() == null) {
+            employee.setEmpRole(EmployeeRole.Employee);
+        }
+
+        if (employee.getPassword() == null || employee.getPassword().isBlank()) {
+            employee.setPassword(defaultPassword);
+        }
+
+        if (managerId != null && !managerId.isBlank()) {
+            Employee manager = employeeRepository.findById(managerId)
+                    .orElseThrow(() -> new CrudValidationException(
+                            Employee.class,
+                            "Manager not found: " + managerId,
+                            CrudValidationErrorCode.INVALID_IDENTIFIER
+                    ));
+            employee.setManager(manager);
+        }
+
+        return addEmployee(employee);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Employee> getManagers() {
+        try {
+            return employeeRepository.findByEmpRole(EmployeeRole.Manager);
+        } catch (Exception e) {
+            throw CrudOperationException.asFailedGetOperation(Employee.class, e);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<Employee> getReporteesByManagerId(String managerId) {
+        if (managerId == null || managerId.isBlank()) {
+            throw new CrudValidationException(Employee.class,
+                    "Manager ID cannot be null/blank",
+                    CrudValidationErrorCode.INVALID_IDENTIFIER);
+        }
+
+        try {
+            return employeeRepository.findByManager_EmployeeId(managerId);
+        } catch (Exception e) {
+            throw CrudOperationException.asFailedGetOperation(Employee.class, e);
         }
     }
 

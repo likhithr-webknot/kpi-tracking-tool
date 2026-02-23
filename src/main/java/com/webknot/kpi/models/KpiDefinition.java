@@ -1,5 +1,6 @@
 package com.webknot.kpi.models;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
@@ -24,6 +25,7 @@ public class KpiDefinition {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @JsonAlias({"kpiDefinitionId", "definitionId", "kpiId"})
     @Column(name = "id", nullable = false)
     private Long id;
 
