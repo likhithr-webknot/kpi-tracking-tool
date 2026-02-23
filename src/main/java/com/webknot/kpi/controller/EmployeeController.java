@@ -16,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 
 @RestController
@@ -45,7 +46,17 @@ public class EmployeeController {
                 List<EmployeeResponse> items = page.items().stream()
                         .map(this::toResponse)
                         .toList();
-                return ResponseEntity.status(HttpStatus.OK).body(new CursorPageResponse<>(items, page.nextCursor()));
+                return ResponseEntity.status(HttpStatus.OK).body(
+                        new CursorPageResponse<>(
+                                items,
+                                page.nextCursor(),
+                                page.total(),
+                                page.managerCount(),
+                                page.adminCount(),
+                                page.employeeCount(),
+                                page.bandCount()
+                        )
+                );
             }
 
             List<Employee> employees = employeeService.getAllEmployees();
@@ -144,6 +155,73 @@ public class EmployeeController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
         } catch (Exception e) {
             log.error("Unexpected error while adding employee with manager: " + e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error: " + e.getMessage());
+        }
+    }
+
+    @RequestMapping(value = {"/{id}/edit", "/edit/{id}", "/update/{id}"}, method = {RequestMethod.PUT, RequestMethod.PATCH, RequestMethod.POST})
+    public ResponseEntity<?> updateEmployee(@PathVariable("id") String id,
+                                            @RequestBody(required = false) UpdateEmployeeRequest request) {
+        try {
+            if (request == null) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Employee update payload is required.");
+            }
+
+            EmployeeService.EmployeeUpdateCommand command = new EmployeeService.EmployeeUpdateCommand(
+                    trimToNull(request.employeeId()),
+                    trimToNull(request.employeeName()),
+                    trimToNull(request.email()),
+                    parseRoleNullable(request.empRole()),
+                    trimToNull(request.stream()),
+                    parseBand(request.band()),
+                    request.managerId(),
+                    request.updatedById(),
+                    request.password()
+            );
+
+            Employee updated = employeeService.updateEmployee(id, command).orElse(null);
+            if (updated == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Employee not found: " + id);
+            }
+
+            log.info("Successfully updated employee with ID: {}", id);
+            return ResponseEntity.status(HttpStatus.OK).body(toResponse(updated));
+        } catch (IllegalArgumentException e) {
+            log.error("Validation error while updating employee {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
+        } catch (CrudValidationException e) {
+            log.error("Validation error while updating employee {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
+        } catch (CrudOperationException e) {
+            log.error("Error while updating employee {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
+        } catch (Exception e) {
+            log.error("Unexpected error while updating employee {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error: " + e.getMessage());
+        }
+    }
+
+    @DeleteMapping({"/delete/{id}", "/{id}"})
+    public ResponseEntity<?> deleteEmployee(@PathVariable("id") String id) {
+        try {
+            boolean deleted = employeeService.deleteEmployee(id);
+            if (!deleted) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Employee not found: " + id);
+            }
+            log.info("Successfully deleted employee with ID: {}", id);
+            LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+            body.put("status", "ok");
+            body.put("id", id);
+            body.put("message", "Employee deleted successfully");
+            return ResponseEntity.status(HttpStatus.OK).body(body);
+        } catch (CrudValidationException e) {
+            log.error("Validation error while deleting employee {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
+        } catch (CrudOperationException e) {
+            log.error("Error while deleting employee {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
+        } catch (Exception e) {
+            log.error("Unexpected error while deleting employee {}: {}", id, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error: " + e.getMessage());
         }
     }
@@ -248,6 +326,17 @@ public class EmployeeController {
         throw new IllegalArgumentException("Invalid employee role: " + value);
     }
 
+    private static EmployeeRole parseRoleNullable(String value) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.isEmpty()) return null;
+        for (EmployeeRole role : EmployeeRole.values()) {
+            if (role.name().equalsIgnoreCase(normalized)) {
+                return role;
+            }
+        }
+        throw new IllegalArgumentException("Invalid employee role: " + value);
+    }
+
     private static CurrentBand parseBand(String value) {
         String normalized = value == null ? "" : value.trim();
         if (normalized.isEmpty()) return null;
@@ -257,6 +346,12 @@ public class EmployeeController {
             }
         }
         throw new IllegalArgumentException("Invalid employee band: " + value);
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     public record EmployeeResponse(
@@ -285,5 +380,26 @@ public class EmployeeController {
             String password
     ) {}
 
-    public record CursorPageResponse<T>(List<T> items, String nextCursor) {}
+    public record UpdateEmployeeRequest(
+            String employeeId,
+            String employeeName,
+            String email,
+            String empRole,
+            String stream,
+            String band,
+            String managerId,
+            String updatedById,
+            String designation,
+            String password
+    ) {}
+
+    public record CursorPageResponse<T>(
+            List<T> items,
+            String nextCursor,
+            Long total,
+            Long managerCount,
+            Long adminCount,
+            Long employeeCount,
+            Long bandCount
+    ) {}
 }

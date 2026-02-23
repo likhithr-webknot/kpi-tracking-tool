@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.security.SecureRandom;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,8 +30,10 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final TokenBlacklistService tokenBlacklistService;
+    private final NotificationService notificationService;
     private final long resetTokenExpirationMs;
-    private final Map<String, ResetTokenData> resetTokens = new ConcurrentHashMap<>();
+    private final Map<String, AdminResetRequestData> adminResetRequests = new ConcurrentHashMap<>();
+    private final SecureRandom secureRandom = new SecureRandom();
     private final Logger log = LogManager.getLogger(AuthService.class);
 
     public AuthService(EmployeeRepository employeeRepository,
@@ -38,12 +41,14 @@ public class AuthService {
                        PasswordEncoder passwordEncoder,
                        JwtService jwtService,
                        TokenBlacklistService tokenBlacklistService,
+                       NotificationService notificationService,
                        @Value("${auth.reset-token-expiration-ms:900000}") long resetTokenExpirationMs) {
         this.employeeRepository = employeeRepository;
         this.designationLookupRepository = designationLookupRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.tokenBlacklistService = tokenBlacklistService;
+        this.notificationService = notificationService;
         this.resetTokenExpirationMs = resetTokenExpirationMs;
     }
 
@@ -72,24 +77,60 @@ public class AuthService {
     }
 
     public ForgotPasswordResult forgotPassword(String email) {
-        employeeRepository.findByEmail(email)
+        Employee employee = employeeRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("No user found with this email"));
+        var admins = employeeRepository.findByEmpRole(EmployeeRole.Admin);
+        if (admins == null || admins.isEmpty()) {
+            throw new IllegalArgumentException("No admin accounts configured to approve password reset.");
+        }
 
-        String token = UUID.randomUUID().toString();
+        String requestId = UUID.randomUUID().toString();
+        String adminCode = generateAdminCode();
         Instant expiresAt = Instant.now().plusMillis(resetTokenExpirationMs);
-        resetTokens.put(token, new ResetTokenData(email, expiresAt));
-        log.info("Password reset token generated for email: {}", email);
+        adminResetRequests.put(
+                requestId,
+                new AdminResetRequestData(employee.getEmail(), passwordEncoder.encode(adminCode), expiresAt)
+        );
+
+        String adminEmails = admins.stream()
+                .map(Employee::getEmail)
+                .filter(v -> v != null && !v.isBlank())
+                .distinct()
+                .reduce((a, b) -> a + ", " + b)
+                .orElse("(no-email-admin)");
+
+        log.warn(
+                "PASSWORD RESET APPROVAL CODE | requestId={} | targetEmail={} | admins={} | code={} | expiresAt={}",
+                requestId,
+                employee.getEmail(),
+                adminEmails,
+                adminCode,
+                expiresAt
+        );
+        notificationService.notifyForgotPasswordRequested(employee, requestId, expiresAt, admins);
 
         return new ForgotPasswordResult(
-                "Password reset token generated successfully",
-                token,
+                "Password reset request submitted. An admin verification code has been sent to administrators.",
+                requestId,
                 expiresAt
         );
     }
 
     public void resetPassword(String token, String newPassword) {
-        if (token == null || token.isBlank()) {
-            throw new IllegalArgumentException("Reset token is required");
+        throw new IllegalArgumentException("Direct password reset is disabled. Please use admin-approved reset flow.");
+    }
+
+    public void adminResetPassword(String actorEmail, String requestId, String adminCode, String newPassword) {
+        Employee admin = employeeRepository.findByEmail(actorEmail)
+                .orElseThrow(() -> new IllegalArgumentException("Unauthorized"));
+        if (admin.getEmpRole() != EmployeeRole.Admin) {
+            throw new IllegalArgumentException("Admin access required");
+        }
+        if (requestId == null || requestId.isBlank()) {
+            throw new IllegalArgumentException("Reset request id is required");
+        }
+        if (adminCode == null || adminCode.isBlank()) {
+            throw new IllegalArgumentException("Admin verification code is required");
         }
         if (newPassword == null || newPassword.isBlank()) {
             throw new IllegalArgumentException("New password is required");
@@ -98,22 +139,32 @@ public class AuthService {
             throw new IllegalArgumentException("New password must be at least 8 characters");
         }
 
-        ResetTokenData tokenData = resetTokens.get(token);
-        if (tokenData == null) {
-            throw new IllegalArgumentException("Invalid reset token");
+        String normalizedRequestId = requestId.trim();
+        String normalizedCode = adminCode.trim();
+        AdminResetRequestData requestData = adminResetRequests.get(normalizedRequestId);
+        if (requestData == null) {
+            throw new IllegalArgumentException("Invalid reset request id");
         }
-        if (tokenData.expiresAt().isBefore(Instant.now())) {
-            resetTokens.remove(token);
-            throw new IllegalArgumentException("Reset token has expired");
+        if (requestData.expiresAt().isBefore(Instant.now())) {
+            adminResetRequests.remove(normalizedRequestId);
+            throw new IllegalArgumentException("Reset request has expired");
+        }
+        if (!passwordEncoder.matches(normalizedCode, requestData.adminCodeHash())) {
+            throw new IllegalArgumentException("Invalid admin verification code");
         }
 
-        Employee employee = employeeRepository.findByEmail(tokenData.email())
+        Employee employee = employeeRepository.findByEmail(requestData.email())
                 .orElseThrow(() -> new IllegalArgumentException("No user found with this email"));
 
         employee.setPassword(passwordEncoder.encode(newPassword));
         employeeRepository.save(employee);
-        resetTokens.remove(token);
-        log.info("Password reset successful for email: {}", employee.getEmail());
+        adminResetRequests.remove(normalizedRequestId);
+        log.info(
+                "Password reset successful for email={} by admin={} using requestId={}",
+                employee.getEmail(),
+                admin.getEmail(),
+                normalizedRequestId
+        );
     }
 
     @Transactional(readOnly = true)
@@ -143,7 +194,7 @@ public class AuthService {
     }
 
     public record AuthResult(String accessToken, String role, String portal) {}
-    public record ForgotPasswordResult(String message, String resetToken, Instant expiresAt) {}
+    public record ForgotPasswordResult(String message, String requestId, Instant expiresAt) {}
     public record MeResponse(
             String employeeId,
             String employeeName,
@@ -172,5 +223,10 @@ public class AuthService {
         DesignationLookup.DesignationId rawId = new DesignationLookup.DesignationId(employee.getStream(), employee.getBand());
         return designationLookupRepository.findById(rawId).map(DesignationLookup::getDesignation).orElse(null);
     }
-    private record ResetTokenData(String email, Instant expiresAt) {}
+    private String generateAdminCode() {
+        int value = secureRandom.nextInt(900_000) + 100_000;
+        return String.valueOf(value);
+    }
+
+    private record AdminResetRequestData(String email, String adminCodeHash, Instant expiresAt) {}
 }

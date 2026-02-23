@@ -43,22 +43,50 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
         } catch (Exception e) {
             thrown = true;
             long durationMs = (System.nanoTime() - startedAtNanos) / 1_000_000L;
-            log.error("HTTP {} {} failed after {}ms clientIp={} status={} message={}",
-                    method, pathWithQuery, durationMs, clientIp, response.getStatus(), e.getMessage(), e);
+            log.error(
+                    "Request {} {} from {} failed after {} ms with status {}. Reason: {}",
+                    method,
+                    pathWithQuery,
+                    clientIp,
+                    durationMs,
+                    response.getStatus(),
+                    e.getMessage(),
+                    e
+            );
             throw e;
         } finally {
             if (!thrown) {
                 long durationMs = (System.nanoTime() - startedAtNanos) / 1_000_000L;
                 int status = response.getStatus();
                 if (status >= 500) {
-                    log.error("HTTP {} {} -> {} in {}ms clientIp={} ua={}",
-                            method, pathWithQuery, status, durationMs, clientIp, userAgent);
+                    log.error(
+                            "Request {} {} from {} completed with server error status {} in {} ms. User-Agent: {}",
+                            method,
+                            pathWithQuery,
+                            clientIp,
+                            status,
+                            durationMs,
+                            userAgent
+                    );
                 } else if (status >= 400) {
-                    log.warn("HTTP {} {} -> {} in {}ms clientIp={} ua={}",
-                            method, pathWithQuery, status, durationMs, clientIp, userAgent);
+                    log.warn(
+                            "Request {} {} from {} completed with client error status {} in {} ms. User-Agent: {}",
+                            method,
+                            pathWithQuery,
+                            clientIp,
+                            status,
+                            durationMs,
+                            userAgent
+                    );
                 } else {
-                    log.info("HTTP {} {} -> {} in {}ms clientIp={}",
-                            method, pathWithQuery, status, durationMs, clientIp);
+                    log.info(
+                            "Request {} {} from {} completed with status {} in {} ms.",
+                            method,
+                            pathWithQuery,
+                            clientIp,
+                            status,
+                            durationMs
+                    );
                 }
             }
             MDC.remove("requestId");

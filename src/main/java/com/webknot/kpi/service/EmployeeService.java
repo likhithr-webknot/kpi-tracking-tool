@@ -89,6 +89,11 @@ public class EmployeeService {
         Pageable pageable = PageRequest.of(0, pageSize + 1);
 
         try {
+            long total = employeeRepository.count();
+            long managerCount = employeeRepository.countByEmpRole(EmployeeRole.Manager);
+            long adminCount = employeeRepository.countByEmpRole(EmployeeRole.Admin);
+            long employeeCount = employeeRepository.countByEmpRole(EmployeeRole.Employee);
+            long bandCount = employeeRepository.countDistinctBand();
             List<Employee> rows = startAfter == null
                     ? employeeRepository.findAllByOrderByEmployeeIdAsc(pageable)
                     : employeeRepository.findByEmployeeIdGreaterThanOrderByEmployeeIdAsc(startAfter, pageable);
@@ -99,7 +104,15 @@ public class EmployeeService {
                     ? items.get(items.size() - 1).getEmployeeId()
                     : null;
 
-            return new EmployeeCursorPage(List.copyOf(items), nextCursor);
+            return new EmployeeCursorPage(
+                    List.copyOf(items),
+                    nextCursor,
+                    total,
+                    managerCount,
+                    adminCount,
+                    employeeCount,
+                    bandCount
+            );
         } catch (Exception e) {
             throw CrudOperationException.asFailedGetOperation(Employee.class, e);
         }
@@ -297,6 +310,174 @@ public class EmployeeService {
         }
     }
 
+    @Transactional
+    public Optional<Employee> updateEmployee(String employeeId, EmployeeUpdateCommand command) {
+        if (employeeId == null || employeeId.isBlank()) {
+            throw new CrudValidationException(Employee.class,
+                    "Employee ID cannot be null/blank",
+                    CrudValidationErrorCode.INVALID_IDENTIFIER);
+        }
+        if (command == null) {
+            throw CrudOperationException.asNullEntity(Employee.class);
+        }
+
+        try {
+            Optional<Employee> existingOpt = employeeRepository.findById(employeeId);
+            if (existingOpt.isEmpty()) {
+                return Optional.empty();
+            }
+
+            Employee employee = existingOpt.get();
+            String payloadEmployeeId = trimToNull(command.employeeId());
+            if (payloadEmployeeId != null && !employeeId.equals(payloadEmployeeId)) {
+                throw new CrudValidationException(Employee.class,
+                        "Path id and payload employeeId mismatch.",
+                        CrudValidationErrorCode.DATA_VALIDATION);
+            }
+
+            String nextEmail = trimToNull(command.email());
+            if (nextEmail == null) {
+                nextEmail = trimToNull(employee.getEmail());
+            }
+            if (nextEmail == null) {
+                throw new CrudValidationException(Employee.class,
+                        "Email cannot be null/blank",
+                        CrudValidationErrorCode.DATA_VALIDATION);
+            }
+            if (!nextEmail.equalsIgnoreCase(String.valueOf(employee.getEmail()))
+                    && employeeRepository.existsByEmail(nextEmail)) {
+                throw new CrudValidationException(Employee.class,
+                        "Employee already exists with email = " + nextEmail,
+                        CrudValidationErrorCode.DATA_VALIDATION);
+            }
+
+            EmployeeRole nextRole = command.empRole() != null ? command.empRole() : employee.getEmpRole();
+            if (nextRole == null) {
+                nextRole = EmployeeRole.Employee;
+            }
+
+            com.webknot.kpi.models.CurrentBand nextBand = command.band() != null ? command.band() : employee.getBand();
+            String requestedStream = trimToNull(command.stream());
+            String nextStream = requestedStream != null ? requestedStream : trimToNull(employee.getStream());
+            if (nextBand == null || nextStream == null) {
+                throw new CrudValidationException(Employee.class,
+                        "Employee stream and band are required",
+                        CrudValidationErrorCode.DATA_VALIDATION);
+            }
+
+            String designationStream = resolveDesignationLookupStream(nextStream, nextBand);
+            if (designationStream == null || designationStream.isBlank()) {
+                throw new CrudValidationException(Employee.class,
+                        "No designation configured for stream=" + nextStream + " and band=" + nextBand,
+                        CrudValidationErrorCode.DATA_VALIDATION);
+            }
+            DesignationLookup.DesignationId designationId = new DesignationLookup.DesignationId(designationStream, nextBand);
+            if (!designationLookupRepository.existsById(designationId)) {
+                throw new CrudValidationException(Employee.class,
+                        "No designation configured for stream=" + designationStream + " and band=" + nextBand,
+                        CrudValidationErrorCode.DATA_VALIDATION);
+            }
+
+            Employee manager = employee.getManager();
+            if (command.managerId() != null) {
+                String managerId = trimToNull(command.managerId());
+                if (managerId == null) {
+                    manager = null;
+                } else {
+                    if (employeeId.equals(managerId)) {
+                        throw new CrudValidationException(Employee.class,
+                                "Employee cannot report to itself",
+                                CrudValidationErrorCode.DATA_VALIDATION);
+                    }
+                    manager = employeeRepository.findById(managerId)
+                            .orElseThrow(() -> new CrudValidationException(
+                                    Employee.class,
+                                    "Manager not found: " + managerId,
+                                    CrudValidationErrorCode.INVALID_IDENTIFIER
+                            ));
+                }
+            }
+
+            Employee updatedBy = getActor().orElse(employee);
+            String updatedById = trimToNull(command.updatedById());
+            if (updatedById != null) {
+                updatedBy = employeeRepository.findById(updatedById)
+                        .orElseThrow(() -> new CrudValidationException(
+                                Employee.class,
+                                "UpdatedBy employee not found: " + updatedById,
+                                CrudValidationErrorCode.INVALID_IDENTIFIER
+                        ));
+            }
+
+            String nextName = trimToNull(command.employeeName());
+            if (nextName != null) {
+                employee.setEmployeeName(nextName);
+            }
+            employee.setEmail(nextEmail);
+            employee.setEmpRole(nextRole);
+            employee.setBand(nextBand);
+            employee.setStream(designationStream);
+            employee.setManager(manager);
+            employee.setUpdatedBy(updatedBy);
+            employee.setUpdatedAt(LocalDateTime.now());
+
+            String nextPassword = trimToNull(command.password());
+            if (nextPassword != null) {
+                employee.setPassword(passwordEncoder.encode(nextPassword));
+            }
+
+            Employee saved = employeeRepository.save(employee);
+            log.info("Employee updated id={} role={} band={} stream={} managerId={}",
+                    saved.getEmployeeId(),
+                    saved.getEmpRole(),
+                    saved.getBand(),
+                    saved.getStream(),
+                    saved.getManager() != null ? saved.getManager().getEmployeeId() : null);
+            return Optional.of(saved);
+        } catch (CrudValidationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw CrudOperationException.asFailedUpdateOperation(Employee.class, e);
+        }
+    }
+
+    @Transactional
+    public boolean deleteEmployee(String employeeId) {
+        if (employeeId == null || employeeId.isBlank()) {
+            throw new CrudValidationException(Employee.class,
+                    "Employee ID cannot be null/blank",
+                    CrudValidationErrorCode.INVALID_IDENTIFIER);
+        }
+
+        try {
+            Optional<Employee> actor = getActor();
+            if (actor.isPresent() && employeeId.equals(actor.get().getEmployeeId())) {
+                throw new CrudValidationException(Employee.class,
+                        "You cannot delete your own user.",
+                        CrudValidationErrorCode.DATA_VALIDATION);
+            }
+
+            Optional<Employee> existingOpt = employeeRepository.findById(employeeId);
+            if (existingOpt.isEmpty()) {
+                return false;
+            }
+
+            employeeRepository.delete(existingOpt.get());
+            log.info("Employee deleted id={}", employeeId);
+            return true;
+        } catch (CrudValidationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw CrudOperationException.asFailedDeleteOperation(Employee.class, e);
+        }
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private int normalizeCursorLimit(Integer limit) {
         if (limit == null || limit <= 0) return DEFAULT_CURSOR_LIMIT;
         return Math.min(limit, MAX_CURSOR_LIMIT);
@@ -320,5 +501,25 @@ public class EmployeeService {
         return canonical;
     }
 
-    public record EmployeeCursorPage(List<Employee> items, String nextCursor) {}
+    public record EmployeeCursorPage(
+            List<Employee> items,
+            String nextCursor,
+            Long total,
+            Long managerCount,
+            Long adminCount,
+            Long employeeCount,
+            Long bandCount
+    ) {}
+
+    public record EmployeeUpdateCommand(
+            String employeeId,
+            String employeeName,
+            String email,
+            EmployeeRole empRole,
+            String stream,
+            com.webknot.kpi.models.CurrentBand band,
+            String managerId,
+            String updatedById,
+            String password
+    ) {}
 }

@@ -107,7 +107,7 @@ public class AuthController {
             log.info("Forgot password requested for email: {}", request.email());
             return ResponseEntity.ok(new ForgotPasswordResponse(
                     result.message(),
-                    result.resetToken(),
+                    result.requestId(),
                     result.expiresAt().toString()
             ));
         } catch (IllegalArgumentException e) {
@@ -124,6 +124,27 @@ public class AuthController {
             return ResponseEntity.ok("Password reset successful");
         } catch (IllegalArgumentException e) {
             log.warn("Password reset failed");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
+        }
+    }
+
+    @PostMapping("/admin/reset-password")
+    public ResponseEntity<?> adminResetPassword(Authentication authentication,
+                                                @Valid @RequestBody AdminResetPasswordRequest request) {
+        if (authentication == null || !authentication.isAuthenticated() || "anonymousUser".equals(authentication.getName())) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Unauthorized");
+        }
+        try {
+            authService.adminResetPassword(
+                    authentication.getName(),
+                    request.requestId(),
+                    request.adminCode(),
+                    request.newPassword()
+            );
+            log.info("Admin password reset completed for requestId={}", request.requestId());
+            return ResponseEntity.ok("Password reset successful");
+        } catch (IllegalArgumentException e) {
+            log.warn("Admin password reset failed for requestId={}", request.requestId());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
         }
     }
@@ -152,6 +173,12 @@ public class AuthController {
             @NotBlank String newPassword
     ) {}
 
+    public record AdminResetPasswordRequest(
+            @NotBlank String requestId,
+            @NotBlank String adminCode,
+            @NotBlank String newPassword
+    ) {}
+
     public record LoginResponse(String tokenType, String role, String portal) {}
-    public record ForgotPasswordResponse(String message, String resetToken, String expiresAt) {}
+    public record ForgotPasswordResponse(String message, String requestId, String expiresAt) {}
 }

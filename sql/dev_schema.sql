@@ -108,6 +108,27 @@ CREATE TABLE IF NOT EXISTS dev.ai_agents (
   CONSTRAINT ai_agents_provider_api_key_key UNIQUE (provider, api_key)
 );
 
+-- Notification center (admin + manager alerts)
+CREATE TABLE IF NOT EXISTS dev.notifications (
+  id BIGSERIAL PRIMARY KEY,
+  recipient_employee_id varchar(255) NOT NULL,
+  type varchar(128) NOT NULL,
+  title varchar(255),
+  message text,
+  payload_json text,
+  is_read boolean NOT NULL DEFAULT false,
+  read_at timestamp,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp,
+  CONSTRAINT fk_notifications_recipient FOREIGN KEY (recipient_employee_id)
+    REFERENCES dev.employees(employee_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_created
+  ON dev.notifications(recipient_employee_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_read_created
+  ON dev.notifications(recipient_employee_id, is_read, created_at DESC);
+
 -- Monthly submissions workflow
 CREATE TABLE IF NOT EXISTS dev.monthly_submissions (
   id BIGSERIAL PRIMARY KEY,

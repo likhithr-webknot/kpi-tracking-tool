@@ -30,17 +30,22 @@ public class MonthlySubmissionService {
     private static final String REVIEW_STATUS_ADMIN_APPROVED = "ADMIN_APPROVED";
     private static final String TYPE_EMPLOYEE = "EMPLOYEE_MONTHLY_SUBMISSION";
     private static final String TYPE_MANAGER_SELF = "MANAGER_SELF_REVIEW";
+    private static final int DEFAULT_CURSOR_LIMIT = 20;
+    private static final int MAX_CURSOR_LIMIT = 100;
 
     private final MonthlySubmissionRepository monthlySubmissionRepository;
     private final EmployeeRepository employeeRepository;
     private final ObjectMapper objectMapper;
+    private final NotificationService notificationService;
 
     public MonthlySubmissionService(MonthlySubmissionRepository monthlySubmissionRepository,
                                     EmployeeRepository employeeRepository,
-                                    ObjectMapper objectMapper) {
+                                    ObjectMapper objectMapper,
+                                    NotificationService notificationService) {
         this.monthlySubmissionRepository = monthlySubmissionRepository;
         this.employeeRepository = employeeRepository;
         this.objectMapper = objectMapper;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -60,11 +65,36 @@ public class MonthlySubmissionService {
                 .findByEmployee_EmployeeIdAndMonthAndSubmissionType(subjectEmployeeId, month, submissionType)
                 .orElseGet(MonthlySubmission::new);
 
+        boolean hasManagerReview = hasNested(payload, "managerReview");
+        boolean hasAdminReview = hasNested(payload, "adminReview");
+        boolean hasWorkflowReview = hasManagerReview || hasAdminReview;
+
         submission.setEmployee(subject);
         submission.setMonth(month);
         submission.setSubmissionType(submissionType);
-        submission.setStatus(STATUS_DRAFT);
-        submission.setReviewStatus(resolveReviewStatus(payload, submission, false));
+        String reviewStatus = resolveReviewStatus(payload, submission, hasWorkflowReview);
+        boolean rejected = REVIEW_STATUS_NEEDS_REVIEW.equalsIgnoreCase(reviewStatus);
+        if (hasWorkflowReview) {
+            submission.setStatus(rejected ? STATUS_DRAFT : STATUS_SUBMITTED);
+        } else {
+            submission.setStatus(STATUS_DRAFT);
+        }
+        submission.setReviewStatus(reviewStatus);
+
+        LocalDateTime now = LocalDateTime.now();
+        if (hasManagerReview) {
+            submission.setManagerSubmittedAt(now);
+            payload.put("managerSubmittedAt", now.toString());
+        }
+        if (hasAdminReview) {
+            submission.setAdminSubmittedAt(now);
+            payload.put("adminSubmittedAt", now.toString());
+        }
+        if (hasWorkflowReview) {
+            payload.put("reviewStatus", reviewStatus);
+            payload.put("reopenedForResubmission", rejected);
+        }
+
         submission.setPayloadJson(toJson(payload));
         submission.setManagerReviewJson(extractNestedJson(payload, "managerReview", submission.getManagerReviewJson()));
         submission.setAdminReviewJson(extractNestedJson(payload, "adminReview", submission.getAdminReviewJson()));
@@ -125,6 +155,8 @@ public class MonthlySubmissionService {
         MonthlySubmission saved = monthlySubmissionRepository.save(submission);
         log.info("Monthly submission saved: id={}, employee={}, month={}, type={}, status={}, reviewStatus={}",
                 saved.getId(), subjectEmployeeId, month, submissionType, saved.getStatus(), saved.getReviewStatus());
+
+        triggerNotificationsForSubmission(actor, subject, submissionType, payload, saved, month, rejected);
         return toResponse(saved, true);
     }
 
@@ -158,17 +190,26 @@ public class MonthlySubmissionService {
     }
 
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> getManagerTeam(Authentication authentication, Map<String, String> query) {
+    public Object getManagerTeam(Authentication authentication, Map<String, String> query) {
         Employee actor = requireActor(authentication);
         requireManagerOrAdmin(actor);
 
         String month = resolveMonth(null, query == null ? null : query.get("month"));
         if (month == null) month = YearMonth.now().toString();
+        YearMonth selectedMonth = YearMonth.parse(month);
         String statusFilter = normalizeUpper(query == null ? null : query.get("status"));
+        String limitRaw = query == null ? null : query.get("limit");
+        String cursorRaw = query == null ? null : query.get("cursor");
+        boolean paginationRequested =
+                (limitRaw != null && !limitRaw.isBlank()) ||
+                (cursorRaw != null && !cursorRaw.isBlank());
 
         List<Employee> reportees = employeeRepository.findByManager_EmployeeId(actor.getEmployeeId());
         List<Map<String, Object>> out = new ArrayList<>();
         for (Employee reportee : reportees) {
+            if (!isEligibleForMonth(reportee, selectedMonth)) {
+                continue;
+            }
             Optional<MonthlySubmission> found = monthlySubmissionRepository
                     .findByEmployee_EmployeeIdAndMonthAndSubmissionType(reportee.getEmployeeId(), month, TYPE_EMPLOYEE);
 
@@ -186,7 +227,31 @@ public class MonthlySubmissionService {
 
         out.sort((a, b) -> String.valueOf(b.getOrDefault("updatedAt", ""))
                 .compareTo(String.valueOf(a.getOrDefault("updatedAt", ""))));
-        return out;
+        if (!paginationRequested) {
+            return out;
+        }
+
+        int pageSize = parseCursorLimit(limitRaw);
+        int offset = parseCursorOffset(cursorRaw);
+        int safeOffset = Math.min(Math.max(offset, 0), out.size());
+        int end = Math.min(safeOffset + pageSize, out.size());
+        List<Map<String, Object>> items = new ArrayList<>(out.subList(safeOffset, end));
+        String nextCursor = end < out.size() ? String.valueOf(end) : null;
+        long submittedCount = out.stream().filter(row -> isSubmittedStatusValue(row.get("status"))).count();
+        long reviewedCount = out.stream().filter(this::hasManagerReview).count();
+        long pendingManagerReviewCount = out.stream()
+                .filter(row -> isSubmittedStatusValue(row.get("status")))
+                .filter(row -> !hasManagerReview(row))
+                .count();
+
+        Map<String, Object> page = new LinkedHashMap<>();
+        page.put("items", items);
+        page.put("nextCursor", nextCursor);
+        page.put("total", out.size());
+        page.put("submittedCount", submittedCount);
+        page.put("reviewedCount", reviewedCount);
+        page.put("pendingManagerReviewCount", pendingManagerReviewCount);
+        return page;
     }
 
     @Transactional(readOnly = true)
@@ -440,15 +505,19 @@ public class MonthlySubmissionService {
 
     private Map<String, Object> toResponse(MonthlySubmission row, boolean includeEmployee) {
         Map<String, Object> payload = parseJsonAsMap(row.getPayloadJson());
+        Map<String, Object> out = new LinkedHashMap<>();
         if (row.getManagerReviewJson() != null && !row.getManagerReviewJson().isBlank()) {
-            payload.putIfAbsent("managerReview", parseJsonAsMap(row.getManagerReviewJson()));
+            Map<String, Object> managerReview = parseJsonAsMap(row.getManagerReviewJson());
+            payload.putIfAbsent("managerReview", managerReview);
+            out.put("managerReview", managerReview);
         }
         if (row.getAdminReviewJson() != null && !row.getAdminReviewJson().isBlank()) {
-            payload.putIfAbsent("adminReview", parseJsonAsMap(row.getAdminReviewJson()));
+            Map<String, Object> adminReview = parseJsonAsMap(row.getAdminReviewJson());
+            payload.putIfAbsent("adminReview", adminReview);
+            out.put("adminReview", adminReview);
         }
         payload.putIfAbsent("reviewStatus", row.getReviewStatus());
 
-        Map<String, Object> out = new LinkedHashMap<>();
         out.put("id", row.getId() != null ? String.valueOf(row.getId()) : null);
         out.put("submissionId", row.getId() != null ? String.valueOf(row.getId()) : null);
         out.put("month", row.getMonth());
@@ -598,5 +667,83 @@ public class MonthlySubmissionService {
             if (!v.isBlank()) return v;
         }
         return null;
+    }
+
+    private int parseCursorLimit(String raw) {
+        if (raw == null || raw.isBlank()) return DEFAULT_CURSOR_LIMIT;
+        try {
+            int parsed = Integer.parseInt(raw.trim());
+            if (parsed <= 0) throw new IllegalArgumentException("Invalid limit. Must be > 0.");
+            return Math.min(parsed, MAX_CURSOR_LIMIT);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Invalid limit. Must be a positive integer.");
+        }
+    }
+
+    private int parseCursorOffset(String raw) {
+        if (raw == null || raw.isBlank()) return 0;
+        try {
+            int parsed = Integer.parseInt(raw.trim());
+            if (parsed < 0) throw new IllegalArgumentException("Invalid cursor. Must be a non-negative integer.");
+            return parsed;
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Invalid cursor. Must be a non-negative integer.");
+        }
+    }
+
+    private boolean isSubmittedStatusValue(Object rawStatus) {
+        String status = rawStatus == null ? "" : String.valueOf(rawStatus).trim().toUpperCase();
+        return "SUBMITTED".equals(status) || "APPROVED".equals(status) || "COMPLETED".equals(status) || "FINAL".equals(status);
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean hasManagerReview(Map<String, Object> row) {
+        if (row == null) return false;
+        if (firstNonBlank(
+                row.get("managerSubmittedAt") == null ? null : String.valueOf(row.get("managerSubmittedAt")),
+                row.get("managerReviewedAt") == null ? null : String.valueOf(row.get("managerReviewedAt"))
+        ) != null) {
+            return true;
+        }
+        Object payloadRaw = row.get("payload");
+        if (!(payloadRaw instanceof Map<?, ?> payload)) return false;
+        if (payload.get("managerReview") instanceof Map<?, ?>) return true;
+        if (payload.get("managerEvaluation") instanceof Map<?, ?>) return true;
+        return firstNonBlank(
+                payload.get("managerSubmittedAt") == null ? null : String.valueOf(payload.get("managerSubmittedAt")),
+                payload.get("managerReviewedAt") == null ? null : String.valueOf(payload.get("managerReviewedAt"))
+        ) != null;
+    }
+
+    private boolean isEligibleForMonth(Employee employee, YearMonth month) {
+        if (employee == null || month == null) return false;
+        if (employee.getCreatedAt() == null) return true;
+        YearMonth joinedMonth = YearMonth.from(employee.getCreatedAt());
+        return !joinedMonth.isAfter(month);
+    }
+
+    private void triggerNotificationsForSubmission(Employee actor,
+                                                   Employee subject,
+                                                   String submissionType,
+                                                   Map<String, Object> payload,
+                                                   MonthlySubmission saved,
+                                                   String month,
+                                                   boolean rejected) {
+        if (actor == null || subject == null || submissionType == null || saved == null) return;
+        if (rejected) return;
+        if (!TYPE_EMPLOYEE.equalsIgnoreCase(submissionType)) return;
+
+        boolean actorIsSubject = actor.getEmployeeId() != null && actor.getEmployeeId().equalsIgnoreCase(subject.getEmployeeId());
+
+        if (actor.getEmpRole() == EmployeeRole.Employee && actorIsSubject) {
+            notificationService.notifyEmployeeSubmittedToManager(subject, month, saved.getId());
+            return;
+        }
+
+        String managerAction = normalizeUpper(extractAction(payload == null ? null : payload.get("managerReview")));
+        boolean managerReviewSubmitted = "SUBMIT".equals(managerAction) || "APPROVE".equals(managerAction);
+        if (actor.getEmpRole() == EmployeeRole.Manager && !actorIsSubject && managerReviewSubmitted) {
+            notificationService.notifyManagerEmployeePairSubmittedToAdmins(subject, actor, month, saved.getId());
+        }
     }
 }
