@@ -1,0 +1,602 @@
+package com.webknot.kpi.service;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.webknot.kpi.models.Employee;
+import com.webknot.kpi.models.EmployeeRole;
+import com.webknot.kpi.models.MonthlySubmission;
+import com.webknot.kpi.repository.EmployeeRepository;
+import com.webknot.kpi.repository.MonthlySubmissionRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.*;
+
+@Service
+public class MonthlySubmissionService {
+    private static final Logger log = LoggerFactory.getLogger(MonthlySubmissionService.class);
+    private static final String STATUS_DRAFT = "DRAFT";
+    private static final String STATUS_SUBMITTED = "SUBMITTED";
+    private static final String REVIEW_STATUS_NEEDS_REVIEW = "NEEDS_REVIEW";
+    private static final String REVIEW_STATUS_MANAGER_APPROVED = "MANAGER_APPROVED";
+    private static final String REVIEW_STATUS_ADMIN_APPROVED = "ADMIN_APPROVED";
+    private static final String TYPE_EMPLOYEE = "EMPLOYEE_MONTHLY_SUBMISSION";
+    private static final String TYPE_MANAGER_SELF = "MANAGER_SELF_REVIEW";
+
+    private final MonthlySubmissionRepository monthlySubmissionRepository;
+    private final EmployeeRepository employeeRepository;
+    private final ObjectMapper objectMapper;
+
+    public MonthlySubmissionService(MonthlySubmissionRepository monthlySubmissionRepository,
+                                    EmployeeRepository employeeRepository,
+                                    ObjectMapper objectMapper) {
+        this.monthlySubmissionRepository = monthlySubmissionRepository;
+        this.employeeRepository = employeeRepository;
+        this.objectMapper = objectMapper;
+    }
+
+    @Transactional
+    public Map<String, Object> saveDraft(Authentication authentication, Map<String, Object> body) {
+        Employee actor = requireActor(authentication);
+        Map<String, Object> payload = toMutableMap(body);
+
+        String month = resolveMonth(payload, null);
+        String subjectEmployeeId = resolveSubjectEmployeeId(payload, actor);
+        Employee subject = requireEmployeeById(subjectEmployeeId);
+        String submissionType = resolveSubmissionType(payload, actor, subjectEmployeeId);
+
+        validatePayload(payload, false);
+        applyStandardPayloadFields(payload, month, submissionType, subjectEmployeeId);
+
+        MonthlySubmission submission = monthlySubmissionRepository
+                .findByEmployee_EmployeeIdAndMonthAndSubmissionType(subjectEmployeeId, month, submissionType)
+                .orElseGet(MonthlySubmission::new);
+
+        submission.setEmployee(subject);
+        submission.setMonth(month);
+        submission.setSubmissionType(submissionType);
+        submission.setStatus(STATUS_DRAFT);
+        submission.setReviewStatus(resolveReviewStatus(payload, submission, false));
+        submission.setPayloadJson(toJson(payload));
+        submission.setManagerReviewJson(extractNestedJson(payload, "managerReview", submission.getManagerReviewJson()));
+        submission.setAdminReviewJson(extractNestedJson(payload, "adminReview", submission.getAdminReviewJson()));
+
+        MonthlySubmission saved = monthlySubmissionRepository.save(submission);
+        log.info("Monthly draft saved: id={}, employee={}, month={}, type={}",
+                saved.getId(), subjectEmployeeId, month, submissionType);
+        return toResponse(saved, true);
+    }
+
+    @Transactional
+    public Map<String, Object> submit(Authentication authentication, Map<String, Object> body) {
+        Employee actor = requireActor(authentication);
+        Map<String, Object> payload = toMutableMap(body);
+
+        String month = resolveMonth(payload, null);
+        String subjectEmployeeId = resolveSubjectEmployeeId(payload, actor);
+        Employee subject = requireEmployeeById(subjectEmployeeId);
+        String submissionType = resolveSubmissionType(payload, actor, subjectEmployeeId);
+
+        validatePayload(payload, true);
+        applyStandardPayloadFields(payload, month, submissionType, subjectEmployeeId);
+
+        MonthlySubmission submission = monthlySubmissionRepository
+                .findByEmployee_EmployeeIdAndMonthAndSubmissionType(subjectEmployeeId, month, submissionType)
+                .orElseGet(MonthlySubmission::new);
+
+        submission.setEmployee(subject);
+        submission.setMonth(month);
+        submission.setSubmissionType(submissionType);
+        submission.setPayloadJson(toJson(payload));
+
+        String reviewStatus = resolveReviewStatus(payload, submission, true);
+        boolean rejected = REVIEW_STATUS_NEEDS_REVIEW.equalsIgnoreCase(reviewStatus);
+        submission.setStatus(rejected ? STATUS_DRAFT : STATUS_SUBMITTED);
+        submission.setReviewStatus(reviewStatus);
+
+        LocalDateTime now = LocalDateTime.now();
+        if (!rejected) {
+            submission.setSubmittedAt(now);
+            payload.put("submittedAt", now.toString());
+        }
+        if (hasNested(payload, "managerReview")) {
+            submission.setManagerSubmittedAt(now);
+            payload.put("managerSubmittedAt", now.toString());
+        }
+        if (hasNested(payload, "adminReview")) {
+            submission.setAdminSubmittedAt(now);
+            payload.put("adminSubmittedAt", now.toString());
+        }
+        payload.put("reviewStatus", reviewStatus);
+        payload.put("reopenedForResubmission", rejected);
+
+        submission.setPayloadJson(toJson(payload));
+        submission.setManagerReviewJson(extractNestedJson(payload, "managerReview", submission.getManagerReviewJson()));
+        submission.setAdminReviewJson(extractNestedJson(payload, "adminReview", submission.getAdminReviewJson()));
+
+        MonthlySubmission saved = monthlySubmissionRepository.save(submission);
+        log.info("Monthly submission saved: id={}, employee={}, month={}, type={}, status={}, reviewStatus={}",
+                saved.getId(), subjectEmployeeId, month, submissionType, saved.getStatus(), saved.getReviewStatus());
+        return toResponse(saved, true);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getMine(Authentication authentication, Map<String, String> query) {
+        Employee actor = requireActor(authentication);
+        String month = resolveMonth(null, query == null ? null : query.get("month"));
+
+        List<MonthlySubmission> candidates;
+        if (month != null) {
+            candidates = monthlySubmissionRepository.findByEmployee_EmployeeIdAndMonthOrderByUpdatedAtDesc(
+                    actor.getEmployeeId(),
+                    month
+            );
+        } else {
+            candidates = monthlySubmissionRepository.findByEmployee_EmployeeIdOrderByUpdatedAtDesc(actor.getEmployeeId());
+        }
+        if (candidates.isEmpty()) return null;
+
+        MonthlySubmission picked = pickSelfSubmission(candidates, actor);
+        return toResponse(picked, false);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getMyHistory(Authentication authentication) {
+        Employee actor = requireActor(authentication);
+        List<MonthlySubmission> rows = monthlySubmissionRepository.findByEmployee_EmployeeIdOrderByUpdatedAtDesc(
+                actor.getEmployeeId()
+        );
+        return rows.stream().map(row -> toResponse(row, false)).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getManagerTeam(Authentication authentication, Map<String, String> query) {
+        Employee actor = requireActor(authentication);
+        requireManagerOrAdmin(actor);
+
+        String month = resolveMonth(null, query == null ? null : query.get("month"));
+        if (month == null) month = YearMonth.now().toString();
+        String statusFilter = normalizeUpper(query == null ? null : query.get("status"));
+
+        List<Employee> reportees = employeeRepository.findByManager_EmployeeId(actor.getEmployeeId());
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Employee reportee : reportees) {
+            Optional<MonthlySubmission> found = monthlySubmissionRepository
+                    .findByEmployee_EmployeeIdAndMonthAndSubmissionType(reportee.getEmployeeId(), month, TYPE_EMPLOYEE);
+
+            Map<String, Object> row;
+            if (found.isPresent()) {
+                row = toResponse(found.get(), true);
+            } else {
+                row = buildPendingRow(reportee, month);
+            }
+
+            String rowStatus = normalizeUpper(row.get("status"));
+            if (statusFilter != null && !statusFilter.equals(rowStatus)) continue;
+            out.add(row);
+        }
+
+        out.sort((a, b) -> String.valueOf(b.getOrDefault("updatedAt", ""))
+                .compareTo(String.valueOf(a.getOrDefault("updatedAt", ""))));
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getAdminAll(Authentication authentication, Map<String, String> query) {
+        Employee actor = requireActor(authentication);
+        requireAdmin(actor);
+
+        String month = resolveMonth(null, query == null ? null : query.get("month"));
+        String status = normalizeUpper(query == null ? null : query.get("status"));
+
+        List<MonthlySubmission> rows;
+        if (month != null && status != null) {
+            rows = monthlySubmissionRepository.findByMonthAndStatusOrderByUpdatedAtDesc(month, status);
+        } else if (month != null) {
+            rows = monthlySubmissionRepository.findByMonthOrderByUpdatedAtDesc(month);
+        } else if (status != null) {
+            rows = monthlySubmissionRepository.findByStatusOrderByUpdatedAtDesc(status);
+        } else {
+            rows = monthlySubmissionRepository.findAllByOrderByUpdatedAtDesc();
+        }
+        return rows.stream().map(row -> toResponse(row, true)).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getAdminById(Authentication authentication, Long id) {
+        Employee actor = requireActor(authentication);
+        requireAdmin(actor);
+        MonthlySubmission row = monthlySubmissionRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Submission not found: " + id));
+        return toResponse(row, true);
+    }
+
+    @Transactional
+    public Map<String, Object> deleteAdminById(Authentication authentication, Long id) {
+        Employee actor = requireActor(authentication);
+        requireAdmin(actor);
+        if (!monthlySubmissionRepository.existsById(id)) {
+            throw new IllegalArgumentException("Submission not found: " + id);
+        }
+        monthlySubmissionRepository.deleteById(id);
+        log.info("Monthly submission deleted: id={}, by={}", id, actor.getEmployeeId());
+        return Map.of("status", "ok", "id", String.valueOf(id));
+    }
+
+    @Transactional
+    public Map<String, Object> submitAdminReview(Authentication authentication, Map<String, Object> body) {
+        Employee actor = requireActor(authentication);
+        requireAdmin(actor);
+        Map<String, Object> payload = toMutableMap(body);
+
+        String month = resolveMonth(payload, null);
+        String subjectEmployeeId = resolveSubjectEmployeeId(payload, actor);
+        String submissionType = resolveSubmissionType(payload, actor, subjectEmployeeId);
+
+        validatePayload(payload, true);
+        applyStandardPayloadFields(payload, month, submissionType, subjectEmployeeId);
+
+        MonthlySubmission existing = monthlySubmissionRepository
+                .findByEmployee_EmployeeIdAndMonthAndSubmissionType(subjectEmployeeId, month, submissionType)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Submission not found for employee=" + subjectEmployeeId + ", month=" + month + ", type=" + submissionType
+                ));
+
+        Map<String, Object> merged = parseJsonAsMap(existing.getPayloadJson());
+        deepMerge(merged, payload);
+        applyStandardPayloadFields(merged, month, submissionType, subjectEmployeeId);
+
+        String reviewStatus = resolveReviewStatus(merged, existing, true);
+        boolean rejected = REVIEW_STATUS_NEEDS_REVIEW.equalsIgnoreCase(reviewStatus);
+
+        existing.setStatus(rejected ? STATUS_DRAFT : STATUS_SUBMITTED);
+        existing.setReviewStatus(reviewStatus);
+        existing.setPayloadJson(toJson(merged));
+        existing.setAdminReviewJson(extractNestedJson(merged, "adminReview", existing.getAdminReviewJson()));
+        existing.setManagerReviewJson(extractNestedJson(merged, "managerReview", existing.getManagerReviewJson()));
+        existing.setAdminSubmittedAt(LocalDateTime.now());
+
+        MonthlySubmission saved = monthlySubmissionRepository.save(existing);
+        log.info("Admin review saved: id={}, employee={}, month={}, actionStatus={}",
+                saved.getId(), subjectEmployeeId, month, reviewStatus);
+        return toResponse(saved, true);
+    }
+
+    private void validatePayload(Map<String, Object> payload, boolean submitting) {
+        if (payload == null) throw new IllegalArgumentException("Request payload is required.");
+        requireArrayIfPresent(payload, "kpiRatings");
+        requireArrayIfPresent(payload, "certifications");
+        requireArrayIfPresent(payload, "webknotValueResponses");
+
+        Number recognitions = asNumber(payload.get("recognitionsCount"));
+        if (recognitions != null && recognitions.doubleValue() < 0) {
+            throw new IllegalArgumentException("Recognitions count cannot be negative.");
+        }
+
+        validateRatingsArray(payload.get("kpiRatings"), "kpiRatings");
+        validateRatingsArray(payload.get("webknotValueResponses"), "webknotValueResponses");
+
+        if (!submitting) return;
+
+        String managerAction = normalizeUpper(extractAction(payload.get("managerReview")));
+        String adminAction = normalizeUpper(extractAction(payload.get("adminReview")));
+        String reviewAction = managerAction != null ? managerAction : adminAction;
+        if ("REJECT".equals(reviewAction)) {
+            String comments = firstNonBlank(
+                    extractComments(payload.get("managerReview")),
+                    extractComments(payload.get("adminReview")),
+                    String.valueOf(payload.getOrDefault("managerComments", "")),
+                    String.valueOf(payload.getOrDefault("adminComments", "")),
+                    String.valueOf(payload.getOrDefault("managerNotes", "")),
+                    String.valueOf(payload.getOrDefault("adminNotes", ""))
+            );
+            if (comments == null || comments.length() < 10) {
+                throw new IllegalArgumentException("Reject comments must be at least 10 characters.");
+            }
+            return;
+        }
+
+        String selfReview = firstNonBlank(
+                asString(payload.get("selfReviewText")),
+                asString(payload.get("selfReview")),
+                asString(payload.get("reviewText"))
+        );
+        if (selfReview == null) {
+            throw new IllegalArgumentException("Self review text is required before submission.");
+        }
+    }
+
+    private void validateRatingsArray(Object raw, String fieldName) {
+        if (!(raw instanceof List<?> list)) return;
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) continue;
+            Number rating = asNumber(map.get("rating"));
+            if (rating == null) continue;
+            double val = rating.doubleValue();
+            if (val < 1 || val > 5) {
+                throw new IllegalArgumentException(fieldName + " ratings must be between 1 and 5.");
+            }
+        }
+    }
+
+    private void requireArrayIfPresent(Map<String, Object> payload, String key) {
+        if (!payload.containsKey(key)) return;
+        Object v = payload.get(key);
+        if (v == null) return;
+        if (!(v instanceof List<?>)) {
+            throw new IllegalArgumentException(key + " must be an array.");
+        }
+    }
+
+    private void applyStandardPayloadFields(Map<String, Object> payload,
+                                            String month,
+                                            String submissionType,
+                                            String subjectEmployeeId) {
+        payload.put("month", month);
+        payload.put("monthKey", month);
+        payload.put("submissionType", submissionType);
+        payload.put("employeeId", subjectEmployeeId);
+        payload.put("subjectEmployeeId", subjectEmployeeId);
+    }
+
+    private String resolveReviewStatus(Map<String, Object> payload, MonthlySubmission current, boolean submitting) {
+        String existing = normalizeUpper(
+                firstNonBlank(asString(payload.get("reviewStatus")), current != null ? current.getReviewStatus() : null)
+        );
+        if (!submitting) return existing != null ? existing : STATUS_DRAFT;
+
+        String managerAction = normalizeUpper(extractAction(payload.get("managerReview")));
+        String adminAction = normalizeUpper(extractAction(payload.get("adminReview")));
+
+        if ("REJECT".equals(adminAction) || "REJECT".equals(managerAction)) return REVIEW_STATUS_NEEDS_REVIEW;
+        if ("APPROVE".equals(adminAction)) return REVIEW_STATUS_ADMIN_APPROVED;
+        if ("APPROVE".equals(managerAction)) return REVIEW_STATUS_MANAGER_APPROVED;
+        if (existing != null && !STATUS_DRAFT.equals(existing)) return existing;
+        return STATUS_SUBMITTED;
+    }
+
+    private String resolveMonth(Map<String, Object> payload, String monthFromQuery) {
+        String raw = monthFromQuery;
+        if (raw == null && payload != null) {
+            raw = firstNonBlank(asString(payload.get("month")), asString(payload.get("monthKey")));
+        }
+        if (raw == null) return null;
+        String cleaned = raw.trim();
+        try {
+            YearMonth parsed = YearMonth.parse(cleaned, DateTimeFormatter.ofPattern("yyyy-MM"));
+            return parsed.toString();
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException("Invalid month. Expected format yyyy-MM.");
+        }
+    }
+
+    private String resolveSubjectEmployeeId(Map<String, Object> payload, Employee actor) {
+        String explicit = payload == null
+                ? null
+                : firstNonBlank(asString(payload.get("subjectEmployeeId")), asString(payload.get("employeeId")));
+        return explicit != null ? explicit : actor.getEmployeeId();
+    }
+
+    private String resolveSubmissionType(Map<String, Object> payload, Employee actor, String subjectEmployeeId) {
+        String explicit = payload == null
+                ? null
+                : firstNonBlank(asString(payload.get("submissionType")), asString(payload.get("type")));
+        if (explicit != null) return explicit.trim().toUpperCase();
+        if (actor.getEmpRole() == EmployeeRole.Manager && actor.getEmployeeId().equalsIgnoreCase(subjectEmployeeId)) {
+            return TYPE_MANAGER_SELF;
+        }
+        return TYPE_EMPLOYEE;
+    }
+
+    private MonthlySubmission pickSelfSubmission(List<MonthlySubmission> candidates, Employee actor) {
+        if (actor.getEmpRole() == EmployeeRole.Manager) {
+            for (MonthlySubmission s : candidates) {
+                if (TYPE_MANAGER_SELF.equalsIgnoreCase(s.getSubmissionType())) return s;
+            }
+        }
+        for (MonthlySubmission s : candidates) {
+            if (TYPE_EMPLOYEE.equalsIgnoreCase(s.getSubmissionType())) return s;
+        }
+        return candidates.get(0);
+    }
+
+    private Map<String, Object> buildPendingRow(Employee employee, String month) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("month", month);
+        payload.put("monthKey", month);
+        payload.put("submissionType", TYPE_EMPLOYEE);
+        payload.put("selfReviewText", "");
+        payload.put("kpiRatings", List.of());
+        payload.put("webknotValueResponses", List.of());
+        payload.put("certifications", List.of());
+        payload.put("recognitionsCount", 0);
+        payload.put("employeeId", employee.getEmployeeId());
+        payload.put("subjectEmployeeId", employee.getEmployeeId());
+
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", null);
+        row.put("submissionId", null);
+        row.put("month", month);
+        row.put("status", "NOT_SUBMITTED");
+        row.put("reviewStatus", "NOT_SUBMITTED");
+        row.put("submissionType", TYPE_EMPLOYEE);
+        row.put("subjectEmployeeId", employee.getEmployeeId());
+        row.put("employeeId", employee.getEmployeeId());
+        row.put("payload", payload);
+        row.put("submittedAt", null);
+        row.put("updatedAt", employee.getUpdatedAt() != null ? employee.getUpdatedAt().toString() : null);
+        row.put("employee", toEmployeeSummary(employee));
+        row.put("reopenedForResubmission", false);
+        return row;
+    }
+
+    private Map<String, Object> toResponse(MonthlySubmission row, boolean includeEmployee) {
+        Map<String, Object> payload = parseJsonAsMap(row.getPayloadJson());
+        if (row.getManagerReviewJson() != null && !row.getManagerReviewJson().isBlank()) {
+            payload.putIfAbsent("managerReview", parseJsonAsMap(row.getManagerReviewJson()));
+        }
+        if (row.getAdminReviewJson() != null && !row.getAdminReviewJson().isBlank()) {
+            payload.putIfAbsent("adminReview", parseJsonAsMap(row.getAdminReviewJson()));
+        }
+        payload.putIfAbsent("reviewStatus", row.getReviewStatus());
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", row.getId() != null ? String.valueOf(row.getId()) : null);
+        out.put("submissionId", row.getId() != null ? String.valueOf(row.getId()) : null);
+        out.put("month", row.getMonth());
+        out.put("status", row.getStatus());
+        out.put("reviewStatus", row.getReviewStatus());
+        out.put("submissionType", row.getSubmissionType());
+        out.put("subjectEmployeeId", row.getEmployee() != null ? row.getEmployee().getEmployeeId() : null);
+        out.put("employeeId", row.getEmployee() != null ? row.getEmployee().getEmployeeId() : null);
+        out.put("payload", payload);
+        out.put("submittedAt", row.getSubmittedAt() != null ? row.getSubmittedAt().toString() : null);
+        out.put("managerSubmittedAt", row.getManagerSubmittedAt() != null ? row.getManagerSubmittedAt().toString() : null);
+        out.put("adminSubmittedAt", row.getAdminSubmittedAt() != null ? row.getAdminSubmittedAt().toString() : null);
+        out.put("updatedAt", row.getUpdatedAt() != null ? row.getUpdatedAt().toString() : null);
+        out.put("createdAt", row.getCreatedAt() != null ? row.getCreatedAt().toString() : null);
+        out.put("reopenedForResubmission", REVIEW_STATUS_NEEDS_REVIEW.equalsIgnoreCase(row.getReviewStatus()));
+        if (includeEmployee && row.getEmployee() != null) {
+            out.put("employee", toEmployeeSummary(row.getEmployee()));
+        }
+        return out;
+    }
+
+    private Map<String, Object> toEmployeeSummary(Employee e) {
+        Map<String, Object> employee = new LinkedHashMap<>();
+        employee.put("employeeId", e.getEmployeeId());
+        employee.put("employeeName", e.getEmployeeName());
+        employee.put("email", e.getEmail());
+        employee.put("stream", e.getStream());
+        employee.put("band", e.getBand() != null ? e.getBand().name() : null);
+        employee.put("managerId", e.getManager() != null ? e.getManager().getEmployeeId() : null);
+        return employee;
+    }
+
+    private Employee requireActor(Authentication authentication) {
+        String email = authentication == null ? null : firstNonBlank(authentication.getName());
+        if (email == null) throw new AccessDeniedException("Unauthorized");
+        return employeeRepository.findByEmail(email)
+                .orElseThrow(() -> new AccessDeniedException("Unauthorized"));
+    }
+
+    private Employee requireEmployeeById(String employeeId) {
+        return employeeRepository.findById(employeeId)
+                .orElseThrow(() -> new IllegalArgumentException("Employee not found: " + employeeId));
+    }
+
+    private void requireAdmin(Employee actor) {
+        if (actor.getEmpRole() != EmployeeRole.Admin) {
+            throw new AccessDeniedException("Admin access required");
+        }
+    }
+
+    private void requireManagerOrAdmin(Employee actor) {
+        if (actor.getEmpRole() != EmployeeRole.Manager && actor.getEmpRole() != EmployeeRole.Admin) {
+            throw new AccessDeniedException("Manager access required");
+        }
+    }
+
+    private Map<String, Object> parseJsonAsMap(String text) {
+        if (text == null || text.isBlank()) return new LinkedHashMap<>();
+        try {
+            return objectMapper.readValue(text, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse submission JSON payload, returning empty object: {}", e.getMessage());
+            return new LinkedHashMap<>();
+        }
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value == null ? Map.of() : value);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to serialize submission payload.");
+        }
+    }
+
+    private Map<String, Object> toMutableMap(Map<String, Object> source) {
+        Map<String, Object> input = source == null ? Map.of() : source;
+        return new LinkedHashMap<>(input);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void deepMerge(Map<String, Object> target, Map<String, Object> source) {
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            Object existing = target.get(key);
+            if (existing instanceof Map<?, ?> existingMap && value instanceof Map<?, ?> incomingMap) {
+                Map<String, Object> next = new LinkedHashMap<>((Map<String, Object>) existingMap);
+                deepMerge(next, (Map<String, Object>) incomingMap);
+                target.put(key, next);
+            } else {
+                target.put(key, value);
+            }
+        }
+    }
+
+    private String extractNestedJson(Map<String, Object> payload, String key, String fallbackJson) {
+        if (payload != null && payload.get(key) instanceof Map<?, ?> map) {
+            return toJson(map);
+        }
+        return fallbackJson;
+    }
+
+    private boolean hasNested(Map<String, Object> payload, String key) {
+        return payload != null && payload.get(key) instanceof Map<?, ?>;
+    }
+
+    private String extractAction(Object reviewRaw) {
+        if (!(reviewRaw instanceof Map<?, ?> review)) return null;
+        return asString(review.get("action"));
+    }
+
+    private String extractComments(Object reviewRaw) {
+        if (!(reviewRaw instanceof Map<?, ?> review)) return null;
+        return firstNonBlank(
+                asString(review.get("comments")),
+                asString(review.get("notes")),
+                asString(review.get("comment"))
+        );
+    }
+
+    private String asString(Object raw) {
+        if (raw == null) return null;
+        String text = String.valueOf(raw).trim();
+        return text.isBlank() ? null : text;
+    }
+
+    private Number asNumber(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof Number number) return number;
+        try {
+            return Double.parseDouble(String.valueOf(raw).trim());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String normalizeUpper(Object raw) {
+        String text = raw == null ? null : String.valueOf(raw).trim();
+        return text == null || text.isBlank() ? null : text.toUpperCase();
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String value : values) {
+            if (value == null) continue;
+            String v = value.trim();
+            if (!v.isBlank()) return v;
+        }
+        return null;
+    }
+}

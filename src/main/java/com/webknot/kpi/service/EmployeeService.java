@@ -8,8 +8,13 @@ import com.webknot.kpi.models.Employee;
 import com.webknot.kpi.models.EmployeeRole;
 import com.webknot.kpi.repository.DesignationLookupRepository;
 import com.webknot.kpi.repository.EmployeeRepository;
+import com.webknot.kpi.util.BandStreamNormalizer;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -20,17 +25,18 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.logging.Logger;
 
 @Service
 public class EmployeeService {
+    private static final int DEFAULT_CURSOR_LIMIT = 10;
+    private static final int MAX_CURSOR_LIMIT = 100;
 
     private final EmployeeRepository employeeRepository;
     private final DesignationLookupRepository designationLookupRepository;
     private final Validator validator;
     private final PasswordEncoder passwordEncoder;
 
-    private final Logger logger = Logger.getLogger(EmployeeService.class.getName());
+    private static final Logger log = LoggerFactory.getLogger(EmployeeService.class);
 
     public EmployeeService(EmployeeRepository employeeRepository,
                            DesignationLookupRepository designationLookupRepository,
@@ -71,6 +77,29 @@ public class EmployeeService {
     public List<Employee> getAllEmployees() {
         try {
             return employeeRepository.findAll();
+        } catch (Exception e) {
+            throw CrudOperationException.asFailedGetOperation(Employee.class, e);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public EmployeeCursorPage getEmployeesCursorPage(Integer limit, String cursor) {
+        int pageSize = normalizeCursorLimit(limit);
+        String startAfter = cursor == null || cursor.isBlank() ? null : cursor.trim();
+        Pageable pageable = PageRequest.of(0, pageSize + 1);
+
+        try {
+            List<Employee> rows = startAfter == null
+                    ? employeeRepository.findAllByOrderByEmployeeIdAsc(pageable)
+                    : employeeRepository.findByEmployeeIdGreaterThanOrderByEmployeeIdAsc(startAfter, pageable);
+
+            boolean hasMore = rows.size() > pageSize;
+            List<Employee> items = hasMore ? rows.subList(0, pageSize) : rows;
+            String nextCursor = hasMore && !items.isEmpty()
+                    ? items.get(items.size() - 1).getEmployeeId()
+                    : null;
+
+            return new EmployeeCursorPage(List.copyOf(items), nextCursor);
         } catch (Exception e) {
             throw CrudOperationException.asFailedGetOperation(Employee.class, e);
         }
@@ -133,13 +162,15 @@ public class EmployeeService {
                         CrudValidationErrorCode.DATA_VALIDATION);
             }
 
-            var designationId = new DesignationLookup.DesignationId(employee.getStream(), employee.getBand());
+            String designationStream = resolveDesignationLookupStream(employee.getStream(), employee.getBand());
+            var designationId = new DesignationLookup.DesignationId(designationStream, employee.getBand());
             if (!designationLookupRepository.existsById(designationId)) {
                 throw new CrudValidationException(Employee.class,
-                        "No designation configured for stream=" + employee.getStream() + " and band=" + employee.getBand(),
+                        "No designation configured for stream=" + designationStream + " and band=" + employee.getBand(),
                         CrudValidationErrorCode.DATA_VALIDATION);
             }
 
+            employee.setStream(designationStream);
             employee.setPassword(passwordEncoder.encode(employee.getPassword()));
             if (employee.getCreatedAt() == null) {
                 employee.setCreatedAt(LocalDateTime.now());
@@ -154,7 +185,7 @@ public class EmployeeService {
                 saved.setUpdatedBy(updater);
                 saved = employeeRepository.save(saved);
             }
-            logger.info("Employee created: " + saved.getEmployeeId());
+            log.info("Employee created id={} stream={} band={}", saved.getEmployeeId(), saved.getStream(), saved.getBand());
             return saved;
         } catch (CrudValidationException e) {
             throw e;
@@ -243,19 +274,21 @@ public class EmployeeService {
             }
 
             var nextBand = nextBandOpt.get();
-            var designationId = new DesignationLookup.DesignationId(employee.getStream(), nextBand);
+            String designationStream = resolveDesignationLookupStream(employee.getStream(), nextBand);
+            var designationId = new DesignationLookup.DesignationId(designationStream, nextBand);
             if (!designationLookupRepository.existsById(designationId)) {
                 throw new CrudValidationException(Employee.class,
-                        "No designation configured for stream=" + employee.getStream() + " and band=" + nextBand,
+                        "No designation configured for stream=" + designationStream + " and band=" + nextBand,
                         CrudValidationErrorCode.DATA_VALIDATION);
             }
 
+            employee.setStream(designationStream);
             employee.setBand(nextBand);
             employee.setUpdatedAt(LocalDateTime.now());
             employee.setUpdatedBy(getActor().orElse(employee));
 
             Employee saved = employeeRepository.save(employee);
-            logger.info("Employee promoted: " + saved.getEmployeeId() + " to " + saved.getBand());
+            log.info("Employee promoted id={} toBand={} stream={}", saved.getEmployeeId(), saved.getBand(), saved.getStream());
             return Optional.of(saved);
         } catch (CrudValidationException e) {
             throw e;
@@ -263,4 +296,29 @@ public class EmployeeService {
             throw CrudOperationException.asFailedUpdateOperation(Employee.class, e);
         }
     }
+
+    private int normalizeCursorLimit(Integer limit) {
+        if (limit == null || limit <= 0) return DEFAULT_CURSOR_LIMIT;
+        return Math.min(limit, MAX_CURSOR_LIMIT);
+    }
+
+    private String resolveDesignationLookupStream(String rawStream, com.webknot.kpi.models.CurrentBand band) {
+        String canonical = BandStreamNormalizer.canonicalStreamLabel(rawStream);
+        if (canonical != null && band != null) {
+            DesignationLookup.DesignationId canonicalId = new DesignationLookup.DesignationId(canonical, band);
+            if (designationLookupRepository.existsById(canonicalId)) {
+                return canonical;
+            }
+        }
+        String raw = rawStream == null ? null : rawStream.trim();
+        if (raw != null && !raw.isBlank() && band != null) {
+            DesignationLookup.DesignationId rawId = new DesignationLookup.DesignationId(raw, band);
+            if (designationLookupRepository.existsById(rawId)) {
+                return raw;
+            }
+        }
+        return canonical;
+    }
+
+    public record EmployeeCursorPage(List<Employee> items, String nextCursor) {}
 }

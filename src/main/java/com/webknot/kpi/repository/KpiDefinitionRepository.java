@@ -4,6 +4,7 @@ import com.webknot.kpi.models.CurrentBand;
 import com.webknot.kpi.models.CurrentStream;
 import com.webknot.kpi.models.KpiDefinition;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Optional;
@@ -19,4 +20,8 @@ public interface KpiDefinitionRepository extends JpaRepository<KpiDefinition, Lo
     List<KpiDefinition> findByBand(CurrentBand band);
 
     List<KpiDefinition> findByStream(CurrentStream stream);
+
+    List<KpiDefinition> findAllByOrderByIdAsc(Pageable pageable);
+
+    List<KpiDefinition> findByIdGreaterThanOrderByIdAsc(Long id, Pageable pageable);
 }

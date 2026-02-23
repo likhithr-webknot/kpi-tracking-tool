@@ -10,6 +10,8 @@ import com.webknot.kpi.repository.KpiDefinitionRepository;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +24,8 @@ import java.util.Set;
 @Service
 public class KpiDefinitionService {
     private static final BigDecimal MAX_TOTAL_WEIGHTAGE = new BigDecimal("100.00");
+    private static final int DEFAULT_CURSOR_LIMIT = 10;
+    private static final int MAX_CURSOR_LIMIT = 100;
 
     private final KpiDefinitionRepository kpiDefinitionRepository;
     private final Validator validator;
@@ -77,6 +81,31 @@ public class KpiDefinitionService {
     public List<KpiDefinition> getAll() {
         try {
             return kpiDefinitionRepository.findAll();
+        } catch (Exception e) {
+            throw CrudOperationException.asFailedGetOperation(KpiDefinition.class, e);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public KpiCursorPage getAllCursorPage(Integer limit, String cursor) {
+        int pageSize = normalizeCursorLimit(limit);
+        Long startAfter = parseCursorId(cursor);
+        Pageable pageable = PageRequest.of(0, pageSize + 1);
+
+        try {
+            List<KpiDefinition> rows = startAfter == null
+                    ? kpiDefinitionRepository.findAllByOrderByIdAsc(pageable)
+                    : kpiDefinitionRepository.findByIdGreaterThanOrderByIdAsc(startAfter, pageable);
+
+            boolean hasMore = rows.size() > pageSize;
+            List<KpiDefinition> items = hasMore ? rows.subList(0, pageSize) : rows;
+            String nextCursor = hasMore && !items.isEmpty()
+                    ? String.valueOf(items.get(items.size() - 1).getId())
+                    : null;
+
+            return new KpiCursorPage(List.copyOf(items), nextCursor);
+        } catch (CrudValidationException e) {
+            throw e;
         } catch (Exception e) {
             throw CrudOperationException.asFailedGetOperation(KpiDefinition.class, e);
         }
@@ -226,4 +255,28 @@ public class KpiDefinitionService {
             throw CrudOperationException.asFailedGetOperation(KpiDefinition.class, e);
         }
     }
+
+    private int normalizeCursorLimit(Integer limit) {
+        if (limit == null || limit <= 0) return DEFAULT_CURSOR_LIMIT;
+        return Math.min(limit, MAX_CURSOR_LIMIT);
+    }
+
+    private Long parseCursorId(String cursor) {
+        if (cursor == null || cursor.isBlank()) return null;
+        try {
+            long id = Long.parseLong(cursor.trim());
+            if (id <= 0) {
+                throw new CrudValidationException(KpiDefinition.class,
+                        "Invalid cursor. Must be a positive KPI id.",
+                        CrudValidationErrorCode.INVALID_IDENTIFIER);
+            }
+            return id;
+        } catch (NumberFormatException e) {
+            throw new CrudValidationException(KpiDefinition.class,
+                    "Invalid cursor. Must be a numeric KPI id.",
+                    CrudValidationErrorCode.INVALID_IDENTIFIER);
+        }
+    }
+
+    public record KpiCursorPage(List<KpiDefinition> items, String nextCursor) {}
 }

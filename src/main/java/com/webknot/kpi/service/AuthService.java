@@ -1,10 +1,13 @@
 package com.webknot.kpi.service;
 
+import com.webknot.kpi.models.DesignationLookup;
 import com.webknot.kpi.models.Employee;
 import com.webknot.kpi.models.EmployeeRole;
+import com.webknot.kpi.repository.DesignationLookupRepository;
 import com.webknot.kpi.repository.EmployeeRepository;
 import com.webknot.kpi.security.JwtService;
 import com.webknot.kpi.security.TokenBlacklistService;
+import com.webknot.kpi.util.BandStreamNormalizer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AuthService {
 
     private final EmployeeRepository employeeRepository;
+    private final DesignationLookupRepository designationLookupRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final TokenBlacklistService tokenBlacklistService;
@@ -30,11 +34,13 @@ public class AuthService {
     private final Logger log = LogManager.getLogger(AuthService.class);
 
     public AuthService(EmployeeRepository employeeRepository,
+                       DesignationLookupRepository designationLookupRepository,
                        PasswordEncoder passwordEncoder,
                        JwtService jwtService,
                        TokenBlacklistService tokenBlacklistService,
                        @Value("${auth.reset-token-expiration-ms:900000}") long resetTokenExpirationMs) {
         this.employeeRepository = employeeRepository;
+        this.designationLookupRepository = designationLookupRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.tokenBlacklistService = tokenBlacklistService;
@@ -125,6 +131,7 @@ public class AuthService {
                 employee.getEmployeeName(),
                 employee.getEmail(),
                 role.name(),
+                resolveDesignation(employee),
                 employee.getStream(),
                 employee.getBand() != null ? employee.getBand().name() : null,
                 employee.getManager() != null ? employee.getManager().getEmployeeId() : null,
@@ -142,6 +149,7 @@ public class AuthService {
             String employeeName,
             String email,
             String role,
+            String designation,
             String stream,
             String band,
             String managerId,
@@ -150,5 +158,19 @@ public class AuthService {
             java.time.LocalDateTime updatedAt,
             String portal
     ) {}
+
+    private String resolveDesignation(Employee employee) {
+        if (employee == null || employee.getBand() == null || employee.getStream() == null || employee.getStream().isBlank()) {
+            return null;
+        }
+        String canonicalStream = BandStreamNormalizer.canonicalStreamLabel(employee.getStream());
+        if (canonicalStream != null && !canonicalStream.isBlank()) {
+            DesignationLookup.DesignationId canonicalId = new DesignationLookup.DesignationId(canonicalStream, employee.getBand());
+            var canonical = designationLookupRepository.findById(canonicalId).map(DesignationLookup::getDesignation);
+            if (canonical.isPresent()) return canonical.get();
+        }
+        DesignationLookup.DesignationId rawId = new DesignationLookup.DesignationId(employee.getStream(), employee.getBand());
+        return designationLookupRepository.findById(rawId).map(DesignationLookup::getDesignation).orElse(null);
+    }
     private record ResetTokenData(String email, Instant expiresAt) {}
 }

@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 
@@ -34,8 +35,15 @@ public class KpiDefinitionController {
     }
 
     @GetMapping("/getall")
-    public ResponseEntity<?> getAll() {
+    public ResponseEntity<?> getAll(@RequestParam(required = false) Integer limit,
+                                    @RequestParam(required = false) String cursor) {
         try {
+            boolean paginationRequested = limit != null || (cursor != null && !cursor.isBlank());
+            if (paginationRequested) {
+                KpiDefinitionService.KpiCursorPage page = kpiDefinitionService.getAllCursorPage(limit, cursor);
+                return ResponseEntity.status(HttpStatus.OK).body(new CursorPageResponse<>(page.items(), page.nextCursor()));
+            }
+
             List<KpiDefinition> defs = kpiDefinitionService.getAll();
             log.info("Successfully fetched " + defs.size() + " KPI definitions");
             return ResponseEntity.status(HttpStatus.OK).body(defs);
@@ -111,12 +119,51 @@ public class KpiDefinitionController {
         }
     }
 
+    @RequestMapping(value = {"/update/{id}", "/edit/{id}"}, method = {RequestMethod.PUT, RequestMethod.PATCH, RequestMethod.POST})
+    public ResponseEntity<?> updateById(@PathVariable Long id, @RequestBody KpiDefinition def) {
+        try {
+            if (id == null || id <= 0) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid KPI Definition id. Must be > 0");
+            }
+            if (def == null) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("KPI definition payload is required");
+            }
+            if (def.getId() != null && !id.equals(def.getId())) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body("Path id and payload id mismatch. Use one KPI id consistently.");
+            }
+            def.setId(id);
+
+            KpiDefinition updated = kpiDefinitionService.update(def);
+            log.info("Successfully updated KPI definition with ID: " + updated.getId());
+            return ResponseEntity.status(HttpStatus.OK).body(updated);
+        } catch (CrudOperationException e) {
+            log.error("Error while updating KPI definition by id: " + e.getMessage(), e);
+            String errorMessage = e.getMessage();
+            if (errorMessage != null && (errorMessage.contains("not found") || errorMessage.contains("Entity not found"))) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorMessage);
+            }
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMessage);
+        } catch (CrudValidationException e) {
+            String validationDetails = toValidationResponse(e);
+            log.error("Validation error while updating KPI definition by id: " + validationDetails, e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(validationDetails);
+        } catch (Exception e) {
+            log.error("Unexpected error while updating KPI definition by id: " + e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
+        }
+    }
+
     @DeleteMapping("/delete/{id}")
     public ResponseEntity<?> delete(@PathVariable Long id) {
         try {
             kpiDefinitionService.delete(id);
             log.info("Successfully deleted KPI definition with ID: " + id);
-            return ResponseEntity.status(HttpStatus.OK).body("KPI definition deleted successfully");
+            LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+            body.put("status", "ok");
+            body.put("id", id);
+            body.put("message", "KPI definition deleted successfully");
+            return ResponseEntity.status(HttpStatus.OK).body(body);
         } catch (CrudOperationException e) {
             log.error("Error while deleting KPI definition: " + e.getMessage(), e);
             String errorMessage = e.getMessage();
@@ -156,4 +203,6 @@ public class KpiDefinitionController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
         }
     }
+
+    public record CursorPageResponse<T>(List<T> items, String nextCursor) {}
 }

@@ -2,6 +2,8 @@ package com.webknot.kpi.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -17,6 +19,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.List;
 
 @Configuration
+@EnableMethodSecurity
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
@@ -36,6 +39,11 @@ public class SecurityConfig {
                         .requestMatchers("/employees/**").permitAll()
                         .requestMatchers("/submission-window/**").permitAll()
                         .requestMatchers("/kpi-definitions/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/bands/list").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/streams/list").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/certifications/list").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/webknot-values/list").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/employee-portal/**").permitAll()
                         .requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers("/swagger-ui.html").permitAll()
                         .requestMatchers("/swagger-ui/**").permitAll()
@@ -61,8 +69,18 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOriginPatterns(List.of("http://localhost:*", "http://127.0.0.1:*"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of(
+                "Authorization",
+                "Content-Type",
+                "X-XSRF-TOKEN",
+                "X-CSRF-TOKEN",
+                "X-Requested-With",
+                "Accept",
+                "Origin"
+        ));
+        config.setExposedHeaders(List.of("Set-Cookie", "Authorization", "X-Request-Id"));
+        config.setMaxAge(3600L);
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

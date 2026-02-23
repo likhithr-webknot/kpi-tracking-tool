@@ -1,6 +1,8 @@
 package com.webknot.kpi.models;
 
-import javax.swing.text.html.Option;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.webknot.kpi.util.BandStreamNormalizer;
+
 import java.util.Optional;
 
 public enum CurrentBand {
@@ -17,6 +19,13 @@ public enum CurrentBand {
     B2,
     B1
     ;
+
+    @JsonCreator
+    public static CurrentBand fromValue(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        return BandStreamNormalizer.parseBand(raw)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid band: " + raw));
+    }
 
     public Optional<CurrentBand> oneBandAbove() {
         return switch (this) {

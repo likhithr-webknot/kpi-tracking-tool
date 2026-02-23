@@ -3,9 +3,12 @@ package com.webknot.kpi.controller;
 import com.webknot.kpi.exceptions.CrudOperationException;
 import com.webknot.kpi.exceptions.CrudValidationException;
 import com.webknot.kpi.models.CurrentBand;
+import com.webknot.kpi.models.DesignationLookup;
 import com.webknot.kpi.models.Employee;
 import com.webknot.kpi.models.EmployeeRole;
+import com.webknot.kpi.repository.DesignationLookupRepository;
 import com.webknot.kpi.service.EmployeeService;
+import com.webknot.kpi.util.BandStreamNormalizer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,23 +23,36 @@ import java.util.List;
 public class EmployeeController {
 
     private final EmployeeService employeeService;
+    private final DesignationLookupRepository designationLookupRepository;
     private final String defaultEmployeePassword;
     private final Logger log = LogManager.getLogger(EmployeeController.class);
 
     public EmployeeController(EmployeeService employeeService,
+                              DesignationLookupRepository designationLookupRepository,
                               @Value("${employee.default-password:Password@123}") String defaultEmployeePassword) {
         this.employeeService = employeeService;
+        this.designationLookupRepository = designationLookupRepository;
         this.defaultEmployeePassword = defaultEmployeePassword;
     }
 
     @GetMapping("/getall")
-    public ResponseEntity<?> getAllEmployees() {
+    public ResponseEntity<?> getAllEmployees(@RequestParam(required = false) Integer limit,
+                                             @RequestParam(required = false) String cursor) {
         try {
+            boolean paginationRequested = limit != null || (cursor != null && !cursor.isBlank());
+            if (paginationRequested) {
+                EmployeeService.EmployeeCursorPage page = employeeService.getEmployeesCursorPage(limit, cursor);
+                List<EmployeeResponse> items = page.items().stream()
+                        .map(this::toResponse)
+                        .toList();
+                return ResponseEntity.status(HttpStatus.OK).body(new CursorPageResponse<>(items, page.nextCursor()));
+            }
+
             List<Employee> employees = employeeService.getAllEmployees();
             log.info("Successfully fetched " + employees.size() + " employees");
 
             List<EmployeeResponse> response = employees.stream()
-                    .map(EmployeeController::toResponse)
+                    .map(this::toResponse)
                     .toList();
 
             return ResponseEntity.status(HttpStatus.OK).body(response);
@@ -136,7 +152,7 @@ public class EmployeeController {
     public ResponseEntity<?> getManagers() {
         try {
             List<EmployeeResponse> response = employeeService.getManagers().stream()
-                    .map(EmployeeController::toResponse)
+                    .map(this::toResponse)
                     .toList();
             log.info("Successfully fetched " + response.size() + " managers");
             return ResponseEntity.status(HttpStatus.OK).body(response);
@@ -153,7 +169,7 @@ public class EmployeeController {
     public ResponseEntity<?> getReportees(@PathVariable("managerId") String managerId) {
         try {
             List<EmployeeResponse> response = employeeService.getReporteesByManagerId(managerId).stream()
-                    .map(EmployeeController::toResponse)
+                    .map(this::toResponse)
                     .toList();
             log.info("Successfully fetched " + response.size() + " reportees for manager " + managerId);
             return ResponseEntity.status(HttpStatus.OK).body(response);
@@ -191,12 +207,13 @@ public class EmployeeController {
         }
     }
 
-    private static EmployeeResponse toResponse(Employee e) {
+    private EmployeeResponse toResponse(Employee e) {
         return new EmployeeResponse(
                 e.getEmployeeId(),
                 e.getEmployeeName(),
                 e.getEmail(),
                 e.getEmpRole() != null ? e.getEmpRole().name() : null,
+                resolveDesignation(e),
                 e.getStream(),
                 e.getBand() != null ? e.getBand().name() : null,
                 e.getManager() != null ? e.getManager().getEmployeeId() : null,
@@ -204,6 +221,20 @@ public class EmployeeController {
                 e.getCreatedAt(),
                 e.getUpdatedAt()
         );
+    }
+
+    private String resolveDesignation(Employee e) {
+        String stream = e != null ? e.getStream() : null;
+        CurrentBand band = e != null ? e.getBand() : null;
+        if (stream == null || stream.isBlank() || band == null) return null;
+        String canonicalStream = BandStreamNormalizer.canonicalStreamLabel(stream);
+        if (canonicalStream != null && !canonicalStream.isBlank()) {
+            DesignationLookup.DesignationId canonicalId = new DesignationLookup.DesignationId(canonicalStream, band);
+            var canonical = designationLookupRepository.findById(canonicalId).map(DesignationLookup::getDesignation);
+            if (canonical.isPresent()) return canonical.get();
+        }
+        DesignationLookup.DesignationId rawId = new DesignationLookup.DesignationId(stream, band);
+        return designationLookupRepository.findById(rawId).map(DesignationLookup::getDesignation).orElse(null);
     }
 
     private static EmployeeRole parseRole(String value) {
@@ -233,6 +264,7 @@ public class EmployeeController {
             String employeeName,
             String email,
             String empRole,
+            String designation,
             String stream,
             String band,
             String managerId,
@@ -252,4 +284,6 @@ public class EmployeeController {
             String designation,
             String password
     ) {}
+
+    public record CursorPageResponse<T>(List<T> items, String nextCursor) {}
 }
