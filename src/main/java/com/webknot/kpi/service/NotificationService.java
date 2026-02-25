@@ -134,6 +134,7 @@ public class NotificationService {
     @Transactional
     public void notifyForgotPasswordRequested(Employee targetEmployee,
                                               String requestId,
+                                              String adminCode,
                                               Instant expiresAt,
                                               List<Employee> admins) {
         if (targetEmployee == null || admins == null || admins.isEmpty()) return;
@@ -145,12 +146,13 @@ public class NotificationService {
             payload.put("employeeId", targetEmployee.getEmployeeId());
             payload.put("employeeName", targetEmployee.getEmployeeName());
             payload.put("email", targetEmployee.getEmail());
+            payload.put("adminCode", adminCode);
             payload.put("recipientRole", "ADMIN");
 
             String title = "Forgot password request";
             String message = (targetEmployee.getEmail() == null || targetEmployee.getEmail().isBlank())
-                    ? "A user requested password reset approval."
-                    : targetEmployee.getEmail() + " requested password reset approval.";
+                    ? "A user requested password reset approval. Admin verification code: " + adminCode
+                    : targetEmployee.getEmail() + " requested password reset approval. Admin verification code: " + adminCode;
 
             createAndDispatch(admin, TYPE_FORGOT_PASSWORD_REQUESTED, title, message, payload);
         }

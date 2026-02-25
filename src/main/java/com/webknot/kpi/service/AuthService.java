@@ -107,7 +107,7 @@ public class AuthService {
                 adminCode,
                 expiresAt
         );
-        notificationService.notifyForgotPasswordRequested(employee, requestId, expiresAt, admins);
+        notificationService.notifyForgotPasswordRequested(employee, requestId, adminCode, expiresAt, admins);
 
         return new ForgotPasswordResult(
                 "Password reset request submitted. An admin verification code has been sent to administrators.",

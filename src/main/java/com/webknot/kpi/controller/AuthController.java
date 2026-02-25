@@ -1,6 +1,8 @@
 package com.webknot.kpi.controller;
 
 import com.webknot.kpi.service.AuthService;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -10,13 +12,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
 import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.web.bind.annotation.CookieValue;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -66,12 +67,17 @@ public class AuthController {
 
     @PostMapping("/logout")
     public ResponseEntity<?> logout(@RequestHeader(name = "Authorization", required = false) String authorization,
-                                    @CookieValue(name = "${auth.cookie.name:access_token}", required = false) String cookieToken) {
+                                    HttpServletRequest request) {
         String token = null;
         if (authorization != null && authorization.startsWith("Bearer ")) {
             token = authorization.substring(7);
-        } else if (cookieToken != null && !cookieToken.isBlank()) {
-            token = cookieToken;
+        } else if (request != null && request.getCookies() != null) {
+            for (Cookie cookie : request.getCookies()) {
+                if (authCookieName.equals(cookie.getName())) {
+                    token = cookie.getValue();
+                    break;
+                }
+            }
         }
         ResponseCookie clearCookie = ResponseCookie.from(authCookieName, "")
                 .httpOnly(true)
