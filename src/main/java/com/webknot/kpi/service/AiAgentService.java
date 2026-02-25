@@ -30,6 +30,7 @@ public class AiAgentService {
     private final AiAgentRepository aiAgentRepository;
     private final ObjectMapper objectMapper;
     private final String defaultEnhanceModel;
+    private final HttpClient httpClient;
 
     public AiAgentService(AiAgentRepository aiAgentRepository,
                           ObjectMapper objectMapper,
@@ -37,6 +38,9 @@ public class AiAgentService {
         this.aiAgentRepository = aiAgentRepository;
         this.objectMapper = objectMapper;
         this.defaultEnhanceModel = defaultEnhanceModel;
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(20))
+                .build();
     }
 
     @Transactional(readOnly = true)
@@ -179,9 +183,6 @@ public class AiAgentService {
 
     private String callOpenAi(String apiKey, String systemPrompt, String userText) {
         try {
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(20))
-                    .build();
             String requestJson = objectMapper.writeValueAsString(Map.of(
                     "model", defaultEnhanceModel,
                     "temperature", 0.3,
@@ -199,7 +200,7 @@ public class AiAgentService {
                     .POST(HttpRequest.BodyPublishers.ofString(requestJson))
                     .build();
 
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IllegalArgumentException("AI request failed with status " + response.statusCode());
             }

@@ -9,6 +9,8 @@ import com.webknot.kpi.models.KpiDefinition;
 import com.webknot.kpi.repository.KpiDefinitionRepository;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -78,6 +80,7 @@ public class KpiDefinitionService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = "kpi-definitions", unless = "#result == null || #result.isEmpty()")
     public List<KpiDefinition> getAll() {
         try {
             return kpiDefinitionRepository.findAll();
@@ -126,6 +129,7 @@ public class KpiDefinitionService {
     }
 
     @Transactional
+    @CacheEvict(value = "kpi-definitions", allEntries = true)
     public KpiDefinition add(KpiDefinition def) {
         checkForNull(def);
         validate(def);
