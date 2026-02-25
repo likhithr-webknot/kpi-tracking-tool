@@ -11,7 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
@@ -297,7 +296,6 @@ public class NotificationService {
         return saved;
     }
 
-    @Async("taskExecutor")
     private void dispatch(NotificationEvent event) {
         if (event == null || event.getRecipient() == null || event.getRecipient().getEmployeeId() == null) {
             return;

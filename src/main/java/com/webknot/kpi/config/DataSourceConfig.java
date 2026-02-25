@@ -52,11 +52,19 @@ public class DataSourceConfig {
         config.setConnectionTestQuery("SELECT 1");
         config.setAutoCommit(true);
         
-        // Connection initialization and leak detection
-        config.setLeakDetectionThreshold(60000); // 60 seconds - logs warnings for connections held longer
+        // Optional leak detection (disabled by default to avoid noisy false positives)
+        long leakThresholdMs = env.getProperty("spring.datasource.hikari.leak-detection-threshold", Long.class, 0L);
+        if (leakThresholdMs > 0) {
+            config.setLeakDetectionThreshold(leakThresholdMs);
+        }
         
         // Pool name for monitoring
         config.setPoolName("KpiApplicationPool");
+        
+        // Shutdown configuration - close idle connections quickly
+        config.setIdleTimeout(300000); // 5 minutes idle timeout
+        config.setMaxLifetime(1800000); // 30 minutes max lifetime
+        config.setConnectionTimeout(30000); // 30 seconds to acquire connection
         
         return new HikariDataSource(config);
     }

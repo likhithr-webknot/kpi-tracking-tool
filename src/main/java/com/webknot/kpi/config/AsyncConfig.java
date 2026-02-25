@@ -32,9 +32,9 @@ public class AsyncConfig {
         // Thread name prefix for monitoring
         executor.setThreadNamePrefix("kpi-async-");
         
-        // Wait for tasks to complete on shutdown (max 30 seconds)
+        // Wait for tasks to complete on shutdown (max 5 seconds instead of 30)
         executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(30);
+        executor.setAwaitTerminationSeconds(5);
         
         // Rejection policy - what to do if queue is full
         executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
