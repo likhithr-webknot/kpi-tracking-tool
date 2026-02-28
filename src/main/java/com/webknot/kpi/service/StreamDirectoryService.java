@@ -6,6 +6,8 @@ import com.webknot.kpi.repository.StreamDirectoryRepository;
 import com.webknot.kpi.util.BandStreamNormalizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +28,7 @@ public class StreamDirectoryService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = "stream-directory", unless = "#result == null || #result.items.isEmpty()")
     public CursorPage list(Boolean activeOnly, Integer limit, String cursor) {
         int pageSize = normalizeLimit(limit);
         int offset = parseOffset(cursor);
@@ -46,6 +49,7 @@ public class StreamDirectoryService {
     }
 
     @Transactional
+    @CacheEvict(value = "stream-directory", allEntries = true)
     public StreamDirectory add(String code, String label, Boolean active, Integer sortOrder) {
         CurrentStream parsedCode = parseStreamCode(code);
         if (streamDirectoryRepository.existsById(parsedCode)) {
@@ -62,6 +66,7 @@ public class StreamDirectoryService {
     }
 
     @Transactional
+    @CacheEvict(value = "stream-directory", allEntries = true)
     public StreamDirectory update(String code, String label, Boolean active, Integer sortOrder) {
         CurrentStream parsedCode = parseStreamCode(code);
         StreamDirectory existing = streamDirectoryRepository.findById(parsedCode)
@@ -83,6 +88,7 @@ public class StreamDirectoryService {
     }
 
     @Transactional
+    @CacheEvict(value = "stream-directory", allEntries = true)
     public void delete(String code) {
         CurrentStream parsedCode = parseStreamCode(code);
         if (!streamDirectoryRepository.existsById(parsedCode)) {

@@ -29,23 +29,27 @@ public class SubmissionWindowService {
     private final SubmissionCycleRepository repo;
     private final EmployeeSubmissionWindowOverrideRepository overrideRepository;
     private final EmployeeRepository employeeRepository;
+    private final CycleCalculationService cycleCalculationService;
     private final Clock clock;
     private final Logger log = LogManager.getLogger(SubmissionWindowService.class);
 
     @Autowired
     public SubmissionWindowService(SubmissionCycleRepository repo,
                                    EmployeeSubmissionWindowOverrideRepository overrideRepository,
-                                   EmployeeRepository employeeRepository) {
-        this(repo, overrideRepository, employeeRepository, Clock.systemUTC());
+                                   EmployeeRepository employeeRepository,
+                                   CycleCalculationService cycleCalculationService) {
+        this(repo, overrideRepository, employeeRepository, cycleCalculationService, Clock.systemUTC());
     }
 
     SubmissionWindowService(SubmissionCycleRepository repo,
                             EmployeeSubmissionWindowOverrideRepository overrideRepository,
                             EmployeeRepository employeeRepository,
+                            CycleCalculationService cycleCalculationService,
                             Clock clock) {
         this.repo = repo;
         this.overrideRepository = overrideRepository;
         this.employeeRepository = employeeRepository;
+        this.cycleCalculationService = cycleCalculationService;
         this.clock = clock;
     }
 
@@ -225,10 +229,7 @@ public class SubmissionWindowService {
     }
 
     private String currentCycleKey(String timezone) {
-        ZoneId zone = ZoneId.of(timezone);
-        ZonedDateTime localNow = ZonedDateTime.now(clock).withZoneSameInstant(zone);
-        YearMonth ym = YearMonth.from(localNow);
-        return ym.format(CYCLE_FMT);
+        return cycleCalculationService.calculateCurrentCycleKey(timezone);
     }
 
     private OffsetDateTime defaultStartAt(OffsetDateTime nowUtc, String timezone) {

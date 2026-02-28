@@ -10,6 +10,7 @@ import com.webknot.kpi.security.TokenBlacklistService;
 import com.webknot.kpi.util.BandStreamNormalizer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -20,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.security.SecureRandom;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -37,7 +39,7 @@ public class AuthService {
     private final long resetTokenExpirationMs;
     private final Map<String, AdminResetRequestData> adminResetRequests = new ConcurrentHashMap<>();
     private final SecureRandom secureRandom = new SecureRandom();
-    private final RedisTemplate<String, Object> redisTemplate;
+    private final Optional<RedisTemplate<String, Object>> redisTemplate;
     private final boolean redisEnabled;
     private final Logger log = LogManager.getLogger(AuthService.class);
 
@@ -47,7 +49,7 @@ public class AuthService {
                        JwtService jwtService,
                        TokenBlacklistService tokenBlacklistService,
                        NotificationService notificationService,
-                       RedisTemplate<String, Object> redisTemplate,
+                       @Autowired(required = false) RedisTemplate<String, Object> redisTemplate,
                        @Value("${auth.reset-token-expiration-ms:900000}") long resetTokenExpirationMs) {
         this.employeeRepository = employeeRepository;
         this.designationLookupRepository = designationLookupRepository;
@@ -56,14 +58,25 @@ public class AuthService {
         this.tokenBlacklistService = tokenBlacklistService;
         this.notificationService = notificationService;
         this.resetTokenExpirationMs = resetTokenExpirationMs;
-        this.redisTemplate = redisTemplate;
+        this.redisTemplate = Optional.ofNullable(redisTemplate);
         this.redisEnabled = isRedisAvailable();
     }
 
     private boolean isRedisAvailable() {
+        if (redisTemplate.isEmpty()) {
+            return false;
+        }
         try {
-            redisTemplate.getConnectionFactory().getConnection().ping();
-            return true;
+            var connection = redisTemplate.get().getConnectionFactory().getConnection();
+            if (connection != null) {
+                try {
+                    connection.ping();
+                    return true;
+                } finally {
+                    connection.close();
+                }
+            }
+            return false;
         } catch (Exception e) {
             return false;
         }
@@ -107,13 +120,11 @@ public class AuthService {
         
         AdminResetRequestData requestData = new AdminResetRequestData(employee.getEmail(), passwordEncoder.encode(adminCode), expiresAt);
         
-        // Store in Redis with expiration
         if (redisEnabled) {
             long ttlSeconds = TimeUnit.MILLISECONDS.toSeconds(resetTokenExpirationMs);
-            redisTemplate.opsForValue().set(RESET_REQUEST_PREFIX + requestId, requestData, ttlSeconds, TimeUnit.SECONDS);
+            redisTemplate.ifPresent(rt -> rt.opsForValue().set(RESET_REQUEST_PREFIX + requestId, requestData, ttlSeconds, TimeUnit.SECONDS));
         }
         
-        // Also store in memory as fallback
         adminResetRequests.put(requestId, requestData);
 
         String adminEmails = admins.stream()
@@ -168,15 +179,13 @@ public class AuthService {
         
         AdminResetRequestData requestData = null;
         
-        // Try Redis first
         if (redisEnabled) {
-            Object redisData = redisTemplate.opsForValue().get(RESET_REQUEST_PREFIX + normalizedRequestId);
-            if (redisData instanceof AdminResetRequestData) {
-                requestData = (AdminResetRequestData) redisData;
-            }
+            requestData = redisTemplate.map(rt -> {
+                Object redisData = rt.opsForValue().get(RESET_REQUEST_PREFIX + normalizedRequestId);
+                return redisData instanceof AdminResetRequestData ? (AdminResetRequestData) redisData : null;
+            }).orElse(null);
         }
         
-        // Fallback to in-memory storage
         if (requestData == null) {
             requestData = adminResetRequests.get(normalizedRequestId);
         }
@@ -186,9 +195,7 @@ public class AuthService {
         }
         if (requestData.expiresAt().isBefore(Instant.now())) {
             adminResetRequests.remove(normalizedRequestId);
-            if (redisEnabled) {
-                redisTemplate.delete(RESET_REQUEST_PREFIX + normalizedRequestId);
-            }
+            redisTemplate.ifPresent(rt -> rt.delete(RESET_REQUEST_PREFIX + normalizedRequestId));
             throw new IllegalArgumentException("Reset request has expired");
         }
         if (!passwordEncoder.matches(normalizedCode, requestData.adminCodeHash())) {

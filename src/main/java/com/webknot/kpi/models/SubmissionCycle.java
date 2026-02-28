@@ -19,16 +19,16 @@ public class SubmissionCycle {
     private UUID id;
 
     @Column(name = "cycle_key", nullable = false, unique = true, length = 7)
-    private String cycleKey; // YYYY-MM
+    private String cycleKey;
 
     @Column(nullable = false, length = 64)
-    private String timezone; // e.g. Asia/Kolkata
+    private String timezone;
 
     @Column(name = "window_start_at", nullable = false)
     private OffsetDateTime windowStartAt;
 
     @Column(name = "window_end_at")
-    private OffsetDateTime windowEndAt; // nullable
+    private OffsetDateTime windowEndAt;
 
     @Column(name = "manual_closed", nullable = false)
     private boolean manualClosed;
@@ -40,7 +40,7 @@ public class SubmissionCycle {
     private OffsetDateTime updatedAt;
 
     @Column(name = "updated_by")
-    private String updatedBy; // FK -> dev.employees(employee_id), nullable
+    private String updatedBy;
 
     @PrePersist
     void onCreate() {

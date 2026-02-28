@@ -6,6 +6,8 @@ import com.webknot.kpi.repository.BandDirectoryRepository;
 import com.webknot.kpi.util.BandStreamNormalizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +28,7 @@ public class BandDirectoryService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = "band-directory", unless = "#result == null || #result.items.isEmpty()")
     public CursorPage list(Boolean activeOnly, Integer limit, String cursor) {
         int pageSize = normalizeLimit(limit);
         int offset = parseOffset(cursor);
@@ -46,6 +49,7 @@ public class BandDirectoryService {
     }
 
     @Transactional
+    @CacheEvict(value = "band-directory", allEntries = true)
     public BandDirectory add(String code, String label, Boolean active, Integer sortOrder) {
         CurrentBand parsedCode = parseBandCode(code);
         if (bandDirectoryRepository.existsById(parsedCode)) {
@@ -62,6 +66,7 @@ public class BandDirectoryService {
     }
 
     @Transactional
+    @CacheEvict(value = "band-directory", allEntries = true)
     public BandDirectory update(String code, String label, Boolean active, Integer sortOrder) {
         CurrentBand parsedCode = parseBandCode(code);
         BandDirectory existing = bandDirectoryRepository.findById(parsedCode)
@@ -83,6 +88,7 @@ public class BandDirectoryService {
     }
 
     @Transactional
+    @CacheEvict(value = "band-directory", allEntries = true)
     public void delete(String code) {
         CurrentBand parsedCode = parseBandCode(code);
         if (!bandDirectoryRepository.existsById(parsedCode)) {

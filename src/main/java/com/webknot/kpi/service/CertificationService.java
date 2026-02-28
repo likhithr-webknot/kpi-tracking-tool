@@ -2,6 +2,8 @@ package com.webknot.kpi.service;
 
 import com.webknot.kpi.models.Certification;
 import com.webknot.kpi.repository.CertificationRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -21,11 +23,13 @@ public class CertificationService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = "certifications", unless = "#result == null || #result.isEmpty()")
     public List<Certification> list(Boolean activeOnly) {
         return listCursor(activeOnly, null, null).items();
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = "certifications", unless = "#result == null || #result.items.isEmpty()")
     public CursorPage listCursor(Boolean activeOnly, Integer limit, String cursor) {
         int pageSize = normalizeCursorLimit(limit);
         Long startAfter = parseCursorId(cursor);
@@ -50,6 +54,7 @@ public class CertificationService {
     }
 
     @Transactional
+    @CacheEvict(value = "certifications", allEntries = true)
     public Certification add(String name, Boolean active) {
         String normalizedName = normalizeName(name);
         if (certificationRepository.existsByNameIgnoreCase(normalizedName)) {
@@ -62,6 +67,7 @@ public class CertificationService {
     }
 
     @Transactional
+    @CacheEvict(value = "certifications", allEntries = true)
     public Certification update(Long id, String name, Boolean active) {
         Certification certification = certificationRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Certification not found: " + id));
@@ -80,6 +86,7 @@ public class CertificationService {
     }
 
     @Transactional
+    @CacheEvict(value = "certifications", allEntries = true)
     public void delete(Long id) {
         if (!certificationRepository.existsById(id)) {
             throw new IllegalArgumentException("Certification not found: " + id);

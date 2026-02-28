@@ -19,7 +19,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -73,7 +72,6 @@ public class EmployeeService {
         return employeeRepository.findByEmail(email);
     }
 
-    @Transactional(readOnly = true)
     public List<Employee> getAllEmployees() {
         try {
             return employeeRepository.findAll();
@@ -82,7 +80,6 @@ public class EmployeeService {
         }
     }
 
-    @Transactional(readOnly = true)
     public EmployeeCursorPage getEmployeesCursorPage(Integer limit, String cursor) {
         int pageSize = normalizeCursorLimit(limit);
         String startAfter = cursor == null || cursor.isBlank() ? null : cursor.trim();
@@ -118,7 +115,6 @@ public class EmployeeService {
         }
     }
 
-    @Transactional(readOnly = true)
     public Optional<Employee> getEmployeeById(String employeeId) {
         if (employeeId == null || employeeId.isBlank()) {
             throw new CrudValidationException(Employee.class,
@@ -133,7 +129,6 @@ public class EmployeeService {
         }
     }
 
-    @Transactional
     public Employee addEmployee(Employee employee) {
         checkForNull(employee);
         validate(employee);
@@ -207,7 +202,6 @@ public class EmployeeService {
         }
     }
 
-    @Transactional
     public Employee addEmployeeWithManager(Employee employee, String managerId, String defaultPassword) {
         if (employee == null) {
             throw CrudOperationException.asNullEntity(Employee.class);
@@ -234,7 +228,6 @@ public class EmployeeService {
         return addEmployee(employee);
     }
 
-    @Transactional(readOnly = true)
     public List<Employee> getManagers() {
         try {
             return employeeRepository.findByEmpRole(EmployeeRole.Manager);
@@ -243,7 +236,6 @@ public class EmployeeService {
         }
     }
 
-    @Transactional(readOnly = true)
     public List<Employee> getReporteesByManagerId(String managerId) {
         if (managerId == null || managerId.isBlank()) {
             throw new CrudValidationException(Employee.class,
@@ -258,7 +250,6 @@ public class EmployeeService {
         }
     }
 
-    @Transactional
     public Optional<Employee> promoteEmployee(String employeeId) {
         if (employeeId == null || employeeId.isBlank()) {
             throw new CrudValidationException(Employee.class,
@@ -310,7 +301,6 @@ public class EmployeeService {
         }
     }
 
-    @Transactional
     public Optional<Employee> updateEmployee(String employeeId, EmployeeUpdateCommand command) {
         if (employeeId == null || employeeId.isBlank()) {
             throw new CrudValidationException(Employee.class,
@@ -441,7 +431,6 @@ public class EmployeeService {
         }
     }
 
-    @Transactional
     public boolean deleteEmployee(String employeeId) {
         if (employeeId == null || employeeId.isBlank()) {
             throw new CrudValidationException(Employee.class,

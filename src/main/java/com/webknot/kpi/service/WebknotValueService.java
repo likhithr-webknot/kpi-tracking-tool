@@ -2,6 +2,8 @@ package com.webknot.kpi.service;
 
 import com.webknot.kpi.models.WebknotValue;
 import com.webknot.kpi.repository.WebknotValueRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -21,6 +23,7 @@ public class WebknotValueService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = "webknot-values", unless = "#result == null || #result.items.isEmpty()")
     public CursorPage list(Boolean activeOnly, Integer limit, String cursor) {
         int pageSize = normalizeCursorLimit(limit);
         Long startAfter = parseCursorId(cursor);
@@ -49,6 +52,7 @@ public class WebknotValueService {
     }
 
     @Transactional
+    @CacheEvict(value = "webknot-values", allEntries = true)
     public WebknotValue add(String title, String pillar, String description, Boolean active) {
         String normalizedTitle = normalizeTitle(title);
         if (webknotValueRepository.existsByTitleIgnoreCase(normalizedTitle)) {
@@ -64,6 +68,7 @@ public class WebknotValueService {
     }
 
     @Transactional
+    @CacheEvict(value = "webknot-values", allEntries = true)
     public WebknotValue update(Long id, String title, String pillar, String description, Boolean active) {
         WebknotValue value = webknotValueRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Webknot value not found: " + id));
@@ -83,6 +88,7 @@ public class WebknotValueService {
     }
 
     @Transactional
+    @CacheEvict(value = "webknot-values", allEntries = true)
     public void delete(Long id) {
         if (!webknotValueRepository.existsById(id)) {
             throw new IllegalArgumentException("Webknot value not found: " + id);
