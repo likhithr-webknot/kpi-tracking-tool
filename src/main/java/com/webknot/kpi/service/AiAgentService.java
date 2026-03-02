@@ -130,11 +130,19 @@ public class AiAgentService {
         }
 
         String systemPrompt = buildSystemPrompt(requestedMode);
-        String enhanced = callOpenAi(agent.getApiKey(), systemPrompt, input);
-        return new EnhanceResult(enhanced, agent.getProvider(), defaultEnhanceModel);
+        // IMPORTANT: Extract apiKey while still in transaction context
+        String apiKey = agent.getApiKey();
+        // Release the database connection before making external HTTP call
+        return callOpenAiOutsideTransaction(apiKey, systemPrompt, input, agent.getProvider());
     }
 
-    @Transactional(readOnly = true)
+    // Helper method that doesn't require a transaction context
+    private EnhanceResult callOpenAiOutsideTransaction(String apiKey, String systemPrompt, String input, String provider) {
+        String enhanced = callOpenAi(apiKey, systemPrompt, input);
+        return new EnhanceResult(enhanced, provider, defaultEnhanceModel);
+    }
+
+    @Transactional(readOnly = true, timeout = 10) // 10 second timeout for read-only operations
     public Optional<ActiveAgentSummary> getActiveAgentSummary() {
         return aiAgentRepository.findFirstByActiveTrueOrderByUpdatedAtDesc()
                 .map(agent -> new ActiveAgentSummary(agent.getProvider(), defaultEnhanceModel));

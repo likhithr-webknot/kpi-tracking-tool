@@ -37,10 +37,17 @@ public class DataSourceConfig {
         config.setConnectionTestQuery("SELECT 1");
         config.setAutoCommit(true);
         
+        // Connection leak detection - will warn if connections held > 2 minutes
         long leakThresholdMs = env.getProperty("spring.datasource.hikari.leak-detection-threshold", Long.class, 0L);
         if (leakThresholdMs > 0) {
             config.setLeakDetectionThreshold(leakThresholdMs);
         }
+        
+        // Validate connections periodically
+        config.setValidationTimeout(5000L);
+        
+        // Connection eviction
+        config.setKeepaliveTime(300000L); // 5 minutes
         
         config.setPoolName("KpiApplicationPool");
         

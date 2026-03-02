@@ -48,7 +48,7 @@ public class NotificationService {
         this.objectMapper = objectMapper;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 10)
     public NotificationPage listForActor(Authentication authentication,
                                          String typesCsv,
                                          Integer limit,
@@ -80,7 +80,7 @@ public class NotificationService {
         return new NotificationPage(payloadItems, nextCursor, unreadCount);
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
     public NotificationPayload markRead(Authentication authentication, Long id, boolean requireAdmin) {
         if (id == null || id <= 0) {
             throw new IllegalArgumentException("Invalid notification id.");
@@ -100,12 +100,15 @@ public class NotificationService {
         return toPayload(row);
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
     public int markAllRead(Authentication authentication, boolean requireAdmin) {
         Employee actor = requireActor(authentication, requireAdmin);
         return notificationEventRepository.markAllRead(actor.getEmployeeId(), LocalDateTime.now());
     }
 
+    // Note: subscribe() is intentionally NOT transactional because SSE connections
+    // are long-lived and should not hold database connections. Database access
+    // happens in separate transactional methods.
     public SseEmitter subscribe(Authentication authentication, String typesCsv, boolean requireAdmin) {
         Employee actor = requireActor(authentication, requireAdmin);
         Set<String> types = normalizeTypes(typesCsv);
@@ -131,7 +134,7 @@ public class NotificationService {
         return emitter;
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
     public void notifyForgotPasswordRequested(Employee targetEmployee,
                                               String requestId,
                                               String adminCode,
@@ -158,7 +161,7 @@ public class NotificationService {
         }
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
     public void notifyEmployeeSubmittedToManager(Employee employee, String month, Long submissionId) {
         if (employee == null) return;
         Employee manager = employee.getManager();
@@ -183,7 +186,7 @@ public class NotificationService {
         createAndDispatch(manager, TYPE_EMPLOYEE_SUBMITTED_FOR_REVIEW, title, message, payload);
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
     public void notifyManagerEmployeePairSubmittedToAdmins(Employee employee,
                                                            Employee manager,
                                                            String month,

@@ -143,6 +143,25 @@ public class MonthlySubmissionsController {
         }
     }
 
+    @PostMapping("/admin/{id}/reject")
+    public ResponseEntity<?> rejectAdminSubmission(@PathVariable String id, 
+                                                   @RequestBody(required = false) Map<String, Object> body,
+                                                   Authentication authentication) {
+        try {
+            Long parsedId = Long.parseLong(String.valueOf(id).trim());
+            return ResponseEntity.ok(monthlySubmissionService.rejectAdminSubmission(authentication, parsedId, body));
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().body("Invalid submission id: " + id);
+        } catch (AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to reject admin submission id={}", id, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Failed to reject submission");
+        }
+    }
+
     @DeleteMapping("/admin/{id}")
     public ResponseEntity<?> deleteAdminById(@PathVariable String id, Authentication authentication) {
         try {

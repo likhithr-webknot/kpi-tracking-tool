@@ -48,7 +48,7 @@ public class MonthlySubmissionService {
         this.notificationService = notificationService;
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
     public Map<String, Object> saveDraft(Authentication authentication, Map<String, Object> body) {
         Employee actor = requireActor(authentication);
         Map<String, Object> payload = toMutableMap(body);
@@ -105,7 +105,7 @@ public class MonthlySubmissionService {
         return toResponse(saved, true);
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
     public Map<String, Object> submit(Authentication authentication, Map<String, Object> body) {
         Employee actor = requireActor(authentication);
         Map<String, Object> payload = toMutableMap(body);
@@ -160,7 +160,7 @@ public class MonthlySubmissionService {
         return toResponse(saved, true);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 10)
     public Map<String, Object> getMine(Authentication authentication, Map<String, String> query) {
         Employee actor = requireActor(authentication);
         String month = resolveMonth(null, query == null ? null : query.get("month"));
@@ -180,7 +180,7 @@ public class MonthlySubmissionService {
         return toResponse(picked, false);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 10)
     public List<Map<String, Object>> getMyHistory(Authentication authentication) {
         Employee actor = requireActor(authentication);
         List<MonthlySubmission> rows = monthlySubmissionRepository.findByEmployee_EmployeeIdOrderByUpdatedAtDesc(
@@ -189,7 +189,7 @@ public class MonthlySubmissionService {
         return rows.stream().map(row -> toResponse(row, false)).toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 10)
     public Object getManagerTeam(Authentication authentication, Map<String, String> query) {
         Employee actor = requireActor(authentication);
         requireManagerOrAdmin(actor);
@@ -254,7 +254,7 @@ public class MonthlySubmissionService {
         return page;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 15)
     public List<Map<String, Object>> getAdminAll(Authentication authentication, Map<String, String> query) {
         Employee actor = requireActor(authentication);
         requireAdmin(actor);
@@ -275,7 +275,7 @@ public class MonthlySubmissionService {
         return rows.stream().map(row -> toResponse(row, true)).toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 10)
     public Map<String, Object> getAdminById(Authentication authentication, Long id) {
         Employee actor = requireActor(authentication);
         requireAdmin(actor);
@@ -284,7 +284,52 @@ public class MonthlySubmissionService {
         return toResponse(row, true);
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
+    public Map<String, Object> rejectAdminSubmission(Authentication authentication, Long id, Map<String, Object> body) {
+        Employee actor = requireActor(authentication);
+        requireAdmin(actor);
+        
+        MonthlySubmission submission = monthlySubmissionRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Submission not found: " + id));
+        
+        // Extract and validate rejection comments
+        String rejectionComments = body != null 
+                ? String.valueOf(body.getOrDefault("rejectionComments", "")).trim() 
+                : "";
+        
+        if (rejectionComments.isEmpty() || rejectionComments.length() < 10) {
+            throw new IllegalArgumentException("Rejection comments must be at least 10 characters long.");
+        }
+        
+        // Get the existing payload
+        Map<String, Object> payload = parseJsonAsMap(submission.getPayloadJson());
+        
+        // Create admin review object with rejection
+        Map<String, Object> adminReview = new LinkedHashMap<>();
+        adminReview.put("action", "REJECT");
+        adminReview.put("comments", rejectionComments);
+        adminReview.put("rejectedAt", LocalDateTime.now().toString());
+        adminReview.put("rejectedBy", actor.getEmployeeId());
+        
+        payload.put("adminReview", adminReview);
+        payload.put("reviewStatus", REVIEW_STATUS_NEEDS_REVIEW);
+        payload.put("reopenedForResubmission", true);
+        
+        // Update submission
+        submission.setStatus(STATUS_DRAFT);
+        submission.setReviewStatus(REVIEW_STATUS_NEEDS_REVIEW);
+        submission.setPayloadJson(toJson(payload));
+        submission.setAdminReviewJson(toJson(adminReview));
+        submission.setAdminSubmittedAt(LocalDateTime.now());
+        
+        MonthlySubmission saved = monthlySubmissionRepository.save(submission);
+        log.info("Admin rejection submitted: id={}, employee={}, month={}, rejectedBy={}",
+                saved.getId(), submission.getEmployee().getEmployeeId(), submission.getMonth(), actor.getEmployeeId());
+        
+        return toResponse(saved, true);
+    }
+
+    @Transactional(timeout = 30)
     public Map<String, Object> deleteAdminById(Authentication authentication, Long id) {
         Employee actor = requireActor(authentication);
         requireAdmin(actor);
@@ -296,7 +341,7 @@ public class MonthlySubmissionService {
         return Map.of("status", "ok", "id", String.valueOf(id));
     }
 
-    @Transactional
+    @Transactional(timeout = 30)
     public Map<String, Object> submitAdminReview(Authentication authentication, Map<String, Object> body) {
         Employee actor = requireActor(authentication);
         requireAdmin(actor);
