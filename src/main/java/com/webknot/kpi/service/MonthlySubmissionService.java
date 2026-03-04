@@ -189,6 +189,88 @@ public class MonthlySubmissionService {
         return rows.stream().map(row -> toResponse(row, false)).toList();
     }
 
+    @Transactional(readOnly = true, timeout = 15)
+    public Map<String, Object> getCycleHistory(Authentication authentication, Map<String, String> query) {
+        Employee actor = requireActor(authentication);
+        String employeeFilter = firstNonBlank(
+                query == null ? null : query.get("employeeId"),
+                query == null ? null : query.get("subjectEmployeeId")
+        );
+        String monthFrom = resolveMonth(null, query == null ? null : query.get("monthFrom"));
+        String monthTo = resolveMonth(null, query == null ? null : query.get("monthTo"));
+        if (monthFrom != null && monthTo != null && monthFrom.compareTo(monthTo) > 0) {
+            throw new IllegalArgumentException("monthFrom must be <= monthTo.");
+        }
+        int maxCyclesPerEmployee = parseMaxCyclesPerEmployee(query == null ? null : query.get("maxCyclesPerEmployee"));
+        boolean includeManagerSelf = parseBoolean(query == null ? null : query.get("includeManagerSelf"), false);
+
+        Set<String> allowedEmployeeIds = resolveAccessibleEmployeeIds(actor, employeeFilter);
+        List<MonthlySubmission> rows = monthlySubmissionRepository.findAllByOrderByUpdatedAtDesc();
+
+        Map<String, Map<String, Object>> employeeEntries = new LinkedHashMap<>();
+        Map<String, Set<String>> seenCycleKeys = new HashMap<>();
+
+        for (MonthlySubmission row : rows) {
+            if (row == null || row.getEmployee() == null || row.getEmployee().getEmployeeId() == null) {
+                continue;
+            }
+            String employeeId = row.getEmployee().getEmployeeId();
+            if (!allowedEmployeeIds.contains(employeeId)) {
+                continue;
+            }
+            if (!includeManagerSelf && TYPE_MANAGER_SELF.equalsIgnoreCase(row.getSubmissionType())) {
+                continue;
+            }
+            if (!withinMonthRange(row.getMonth(), monthFrom, monthTo)) {
+                continue;
+            }
+
+            Map<String, Object> bucket = employeeEntries.computeIfAbsent(employeeId, key -> {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("employee", toEmployeeSummary(row.getEmployee()));
+                entry.put("cycles", new ArrayList<Map<String, Object>>());
+                return entry;
+            });
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> cycles = (List<Map<String, Object>>) bucket.get("cycles");
+            Set<String> seenForEmployee = seenCycleKeys.computeIfAbsent(employeeId, key -> new LinkedHashSet<>());
+            String cycleKey = row.getMonth() + "|" + normalizeUpper(row.getSubmissionType());
+            if (!seenForEmployee.add(cycleKey)) {
+                continue;
+            }
+            if (cycles.size() >= maxCyclesPerEmployee) {
+                continue;
+            }
+
+            Map<String, Object> full = toResponse(row, true);
+            Map<String, Object> cycle = new LinkedHashMap<>();
+            cycle.put("id", full.get("id"));
+            cycle.put("month", full.get("month"));
+            cycle.put("submissionType", full.get("submissionType"));
+            cycle.put("status", full.get("status"));
+            cycle.put("reviewStatus", full.get("reviewStatus"));
+            cycle.put("payload", full.get("payload"));
+            cycle.put("managerReview", full.get("managerReview"));
+            cycle.put("adminReview", full.get("adminReview"));
+            cycle.put("submittedAt", full.get("submittedAt"));
+            cycle.put("managerSubmittedAt", full.get("managerSubmittedAt"));
+            cycle.put("adminSubmittedAt", full.get("adminSubmittedAt"));
+            cycle.put("updatedAt", full.get("updatedAt"));
+            cycles.add(cycle);
+        }
+
+        List<Map<String, Object>> employees = new ArrayList<>(employeeEntries.values());
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("employeeCount", employees.size());
+        response.put("monthFrom", monthFrom);
+        response.put("monthTo", monthTo);
+        response.put("includeManagerSelf", includeManagerSelf);
+        response.put("maxCyclesPerEmployee", maxCyclesPerEmployee);
+        response.put("employees", employees);
+        return response;
+    }
+
     @Transactional(readOnly = true, timeout = 10)
     public Object getManagerTeam(Authentication authentication, Map<String, String> query) {
         Employee actor = requireActor(authentication);
@@ -734,6 +816,91 @@ public class MonthlySubmissionService {
         } catch (NumberFormatException ex) {
             throw new IllegalArgumentException("Invalid cursor. Must be a non-negative integer.");
         }
+    }
+
+    private int parseMaxCyclesPerEmployee(String raw) {
+        if (raw == null || raw.isBlank()) return 24;
+        try {
+            int parsed = Integer.parseInt(raw.trim());
+            if (parsed <= 0) {
+                throw new IllegalArgumentException("maxCyclesPerEmployee must be > 0.");
+            }
+            return Math.min(parsed, 120);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Invalid maxCyclesPerEmployee. Must be a positive integer.");
+        }
+    }
+
+    private boolean parseBoolean(String raw, boolean defaultValue) {
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        String normalized = raw.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "1", "true", "yes", "y" -> true;
+            case "0", "false", "no", "n" -> false;
+            default -> defaultValue;
+        };
+    }
+
+    private boolean withinMonthRange(String month, String monthFrom, String monthTo) {
+        if (month == null || month.isBlank()) {
+            return false;
+        }
+        if (monthFrom != null && month.compareTo(monthFrom) < 0) {
+            return false;
+        }
+        if (monthTo != null && month.compareTo(monthTo) > 0) {
+            return false;
+        }
+        return true;
+    }
+
+    private Set<String> resolveAccessibleEmployeeIds(Employee actor, String employeeFilter) {
+        if (actor == null || actor.getEmployeeId() == null) {
+            throw new AccessDeniedException("Unauthorized");
+        }
+
+        String actorId = actor.getEmployeeId();
+        String requestedEmployeeId = firstNonBlank(employeeFilter);
+
+        if (actor.getEmpRole() == EmployeeRole.Admin) {
+            if (requestedEmployeeId != null) {
+                requireEmployeeById(requestedEmployeeId);
+                return Set.of(requestedEmployeeId);
+            }
+            List<Employee> allEmployees = employeeRepository.findAll();
+            Set<String> ids = new LinkedHashSet<>();
+            for (Employee employee : allEmployees) {
+                if (employee != null && employee.getEmployeeId() != null && !employee.getEmployeeId().isBlank()) {
+                    ids.add(employee.getEmployeeId());
+                }
+            }
+            return ids;
+        }
+
+        if (actor.getEmpRole() == EmployeeRole.Manager) {
+            Set<String> allowed = new LinkedHashSet<>();
+            allowed.add(actorId);
+            List<Employee> reportees = employeeRepository.findByManager_EmployeeId(actorId);
+            for (Employee reportee : reportees) {
+                if (reportee != null && reportee.getEmployeeId() != null && !reportee.getEmployeeId().isBlank()) {
+                    allowed.add(reportee.getEmployeeId());
+                }
+            }
+            if (requestedEmployeeId == null) {
+                return allowed;
+            }
+            if (!allowed.contains(requestedEmployeeId)) {
+                throw new AccessDeniedException("You are not allowed to view this employee's cycle history.");
+            }
+            return Set.of(requestedEmployeeId);
+        }
+
+        if (requestedEmployeeId != null && !actorId.equalsIgnoreCase(requestedEmployeeId)) {
+            throw new AccessDeniedException("You are not allowed to view another employee's cycle history.");
+        }
+        return Set.of(actorId);
     }
 
     private boolean isSubmittedStatusValue(Object rawStatus) {

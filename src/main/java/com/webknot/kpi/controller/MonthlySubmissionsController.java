@@ -83,6 +83,21 @@ public class MonthlySubmissionsController {
         }
     }
 
+    @GetMapping("/cycles")
+    public ResponseEntity<?> getCycleHistory(@RequestParam(required = false) Map<String, String> query,
+                                             Authentication authentication) {
+        try {
+            return ResponseEntity.ok(monthlySubmissionService.getCycleHistory(authentication, query));
+        } catch (AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to fetch cycle history", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Failed to fetch cycle history");
+        }
+    }
+
     @GetMapping("/manager/team")
     public ResponseEntity<?> getManagerTeam(@RequestParam(required = false) Map<String, String> query,
                                             Authentication authentication) {

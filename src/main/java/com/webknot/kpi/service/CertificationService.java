@@ -22,70 +22,81 @@ public class CertificationService {
         this.certificationRepository = certificationRepository;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 5)
     @Cacheable(value = "certifications", unless = "#result == null || #result.isEmpty()")
     public List<Certification> list(Boolean activeOnly) {
         return listCursor(activeOnly, null, null).items();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 5)
     @Cacheable(value = "certifications", unless = "#result == null || #result.items.isEmpty()")
     public CursorPage listCursor(Boolean activeOnly, Integer limit, String cursor) {
         int pageSize = normalizeCursorLimit(limit);
-        Long startAfter = parseCursorId(cursor);
+        Long cursorId = parseCursorId(cursor);
         Pageable pageable = PageRequest.of(0, pageSize + 1);
-        boolean onlyActive = activeOnly == null || activeOnly;
-
-        List<Certification> rows = onlyActive
-                ? (startAfter == null
-                    ? certificationRepository.findByActiveOrderByIdAsc(true, pageable)
-                    : certificationRepository.findByActiveAndIdGreaterThanOrderByIdAsc(true, startAfter, pageable))
-                : (startAfter == null
-                    ? certificationRepository.findAllByOrderByIdAsc(pageable)
-                    : certificationRepository.findByIdGreaterThanOrderByIdAsc(startAfter, pageable));
-
-        boolean hasMore = rows.size() > pageSize;
-        List<Certification> items = hasMore ? rows.subList(0, pageSize) : rows;
-        String nextCursor = hasMore && !items.isEmpty()
-                ? String.valueOf(items.get(items.size() - 1).getId())
-                : null;
-
-        return new CursorPage(List.copyOf(items), nextCursor);
+        
+        List<Certification> results;
+        if (activeOnly != null && activeOnly) {
+            if (cursorId == null) {
+                results = certificationRepository.findByActiveOrderByIdAsc(true, pageable);
+            } else {
+                results = certificationRepository.findByActiveAndIdGreaterThanOrderByIdAsc(true, cursorId, pageable);
+            }
+        } else {
+            if (cursorId == null) {
+                results = certificationRepository.findAllByOrderByIdAsc(pageable);
+            } else {
+                results = certificationRepository.findByIdGreaterThanOrderByIdAsc(cursorId, pageable);
+            }
+        }
+        
+        boolean hasMore = results.size() > pageSize;
+        List<Certification> items = hasMore ? results.subList(0, pageSize) : results;
+        String nextCursor = hasMore && !items.isEmpty() ? String.valueOf(items.get(items.size() - 1).getId()) : null;
+        
+        return new CursorPage(items, nextCursor);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "certifications", allEntries = true)
     public Certification add(String name, Boolean active) {
         String normalizedName = normalizeName(name);
+        
         if (certificationRepository.existsByNameIgnoreCase(normalizedName)) {
-            throw new IllegalArgumentException("Certification already exists: " + normalizedName);
+            throw new IllegalArgumentException("Certification with this name already exists: " + normalizedName);
         }
+        
         Certification certification = new Certification();
         certification.setName(normalizedName);
-        certification.setActive(active == null || active);
+        certification.setActive(active != null ? active : true);
+        
         return certificationRepository.save(certification);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "certifications", allEntries = true)
     public Certification update(Long id, String name, Boolean active) {
         Certification certification = certificationRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Certification not found: " + id));
-
-        if (name != null) {
-            String normalizedName = normalizeName(name);
-            boolean nameChanged = !normalizedName.equalsIgnoreCase(certification.getName());
-            if (nameChanged && certificationRepository.existsByNameIgnoreCase(normalizedName)) {
-                throw new IllegalArgumentException("Certification already exists: " + normalizedName);
+        
+        String normalizedName = normalizeName(name);
+        
+        // Check if name is being changed and if new name already exists
+        if (!certification.getName().equalsIgnoreCase(normalizedName)) {
+            if (certificationRepository.existsByNameIgnoreCase(normalizedName)) {
+                throw new IllegalArgumentException("Certification with this name already exists: " + normalizedName);
             }
-            certification.setName(normalizedName);
         }
-
-        if (active != null) certification.setActive(active);
+        
+        certification.setName(normalizedName);
+        if (active != null) {
+            certification.setActive(active);
+        }
+        
         return certificationRepository.save(certification);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "certifications", allEntries = true)
     public void delete(Long id) {
         if (!certificationRepository.existsById(id)) {

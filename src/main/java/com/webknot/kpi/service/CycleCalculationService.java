@@ -134,7 +134,7 @@ public class CycleCalculationService {
         try {
             parseYearMonth(cycleKey);
             return true;
-        } catch (DateTimeParseException e) {
+        } catch (IllegalArgumentException e) {
             return false;
         }
     }

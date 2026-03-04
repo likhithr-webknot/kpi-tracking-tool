@@ -27,67 +27,80 @@ public class BandDirectoryService {
         this.bandDirectoryRepository = bandDirectoryRepository;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 5)
     @Cacheable(value = "band-directory", unless = "#result == null || #result.items.isEmpty()")
     public CursorPage list(Boolean activeOnly, Integer limit, String cursor) {
         int pageSize = normalizeLimit(limit);
         int offset = parseOffset(cursor);
-        boolean active = Boolean.TRUE.equals(activeOnly);
-
-        List<BandDirectory> sorted = bandDirectoryRepository.findAll().stream()
-                .filter(row -> !active || row.isActive())
-                .sorted(Comparator
-                        .comparing(BandDirectory::getSortOrder, Comparator.nullsLast(Integer::compareTo))
-                        .thenComparing(row -> row.getCode() == null ? "" : row.getCode().name()))
-                .toList();
-
-        int safeOffset = Math.min(offset, sorted.size());
-        int end = Math.min(safeOffset + pageSize, sorted.size());
-        List<BandDirectory> items = sorted.subList(safeOffset, end);
-        String nextCursor = end < sorted.size() ? String.valueOf(end) : null;
-        return new CursorPage(List.copyOf(items), nextCursor);
+        
+        List<BandDirectory> all = activeOnly != null && activeOnly 
+            ? bandDirectoryRepository.findAll().stream().filter(BandDirectory::isActive).toList()
+            : bandDirectoryRepository.findAll();
+        
+        List<BandDirectory> sorted = all.stream()
+            .sorted(Comparator.comparing(BandDirectory::getSortOrder, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(bd -> bd.getCode().name()))
+            .skip(offset)
+            .limit(pageSize + 1)
+            .toList();
+        
+        boolean hasMore = sorted.size() > pageSize;
+        List<BandDirectory> items = hasMore ? sorted.subList(0, pageSize) : sorted;
+        String nextCursor = hasMore ? String.valueOf(offset + pageSize) : null;
+        
+        return new CursorPage(items, nextCursor);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "band-directory", allEntries = true)
     public BandDirectory add(String code, String label, Boolean active, Integer sortOrder) {
         CurrentBand parsedCode = parseBandCode(code);
+        
         if (bandDirectoryRepository.existsById(parsedCode)) {
             throw new IllegalArgumentException("Band already exists: " + parsedCode.name());
         }
-        BandDirectory row = new BandDirectory();
-        row.setCode(parsedCode);
-        row.setLabel(firstNonBlank(label, parsedCode.name()));
-        row.setActive(active == null || active);
-        row.setSortOrder(sortOrder != null ? sortOrder : parsedCode.ordinal());
-        BandDirectory saved = bandDirectoryRepository.save(row);
-        log.info("Band directory row created code={}", parsedCode.name());
+        
+        String finalLabel = firstNonBlank(label, parsedCode.name());
+        if (finalLabel == null || finalLabel.isBlank()) {
+            throw new IllegalArgumentException("Band label is required");
+        }
+        
+        BandDirectory bandDirectory = new BandDirectory();
+        bandDirectory.setCode(parsedCode);
+        bandDirectory.setLabel(finalLabel);
+        bandDirectory.setActive(active != null ? active : true);
+        bandDirectory.setSortOrder(sortOrder);
+        
+        BandDirectory saved = bandDirectoryRepository.save(bandDirectory);
+        log.info("Band directory row added code={} label={}", parsedCode.name(), finalLabel);
         return saved;
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "band-directory", allEntries = true)
     public BandDirectory update(String code, String label, Boolean active, Integer sortOrder) {
         CurrentBand parsedCode = parseBandCode(code);
-        BandDirectory existing = bandDirectoryRepository.findById(parsedCode)
+        
+        BandDirectory bandDirectory = bandDirectoryRepository.findById(parsedCode)
                 .orElseThrow(() -> new IllegalArgumentException("Band not found: " + parsedCode.name()));
-
-        if (label != null) {
-            existing.setLabel(firstNonBlank(label, existing.getLabel(), parsedCode.name()));
+        
+        String finalLabel = firstNonBlank(label, bandDirectory.getLabel());
+        if (finalLabel == null || finalLabel.isBlank()) {
+            throw new IllegalArgumentException("Band label is required");
         }
+        
+        bandDirectory.setLabel(finalLabel);
         if (active != null) {
-            existing.setActive(active);
+            bandDirectory.setActive(active);
         }
-        if (sortOrder != null) {
-            existing.setSortOrder(sortOrder);
-        }
-
-        BandDirectory saved = bandDirectoryRepository.save(existing);
-        log.info("Band directory row updated code={}", parsedCode.name());
+        bandDirectory.setSortOrder(sortOrder);
+        
+        BandDirectory saved = bandDirectoryRepository.save(bandDirectory);
+        log.info("Band directory row updated code={} label={}", parsedCode.name(), finalLabel);
         return saved;
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "band-directory", allEntries = true)
     public void delete(String code) {
         CurrentBand parsedCode = parseBandCode(code);

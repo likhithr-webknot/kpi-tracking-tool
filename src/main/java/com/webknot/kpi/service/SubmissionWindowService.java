@@ -77,60 +77,53 @@ public class SubmissionWindowService {
         );
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public SubmissionWindowResponse scheduleCurrentWindow(ScheduleWindowRequest req, String actorEmployeeId) {
-        if (req.endAt() != null && req.endAt().isBefore(req.startAt())) {
-            throw new IllegalArgumentException("endAt must be >= startAt");
-        }
-
         SubmissionCycle cycle = getOrCreateCurrentCycle(DEFAULT_TZ);
         cycle.setWindowStartAt(req.startAt());
         cycle.setWindowEndAt(req.endAt());
         cycle.setManualClosed(false);
         cycle.setUpdatedBy(actorEmployeeId);
-
         repo.save(cycle);
-        log.info("Submission window scheduled for cycle: {}", cycle.getCycleKey());
-
+        
         OffsetDateTime now = OffsetDateTime.now(clock);
+        log.info("Submission window scheduled for cycle={}, start={}, end={}, actor={}",
+                cycle.getCycleKey(), req.startAt(), req.endAt(), actorEmployeeId);
         return toResponse(cycle, now);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public SubmissionWindowResponse openNow(String actorEmployeeId) {
         SubmissionCycle cycle = getOrCreateCurrentCycle(DEFAULT_TZ);
         OffsetDateTime now = OffsetDateTime.now(clock);
-
         cycle.setWindowStartAt(now);
         cycle.setWindowEndAt(null);
         cycle.setManualClosed(false);
         cycle.setUpdatedBy(actorEmployeeId);
-
         repo.save(cycle);
-        log.info("Submission window opened immediately for cycle: {}", cycle.getCycleKey());
+        
+        log.info("Submission window opened immediately for cycle={}, actor={}", cycle.getCycleKey(), actorEmployeeId);
         return toResponse(cycle, now);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public SubmissionWindowResponse closeNow(String actorEmployeeId) {
         SubmissionCycle cycle = getOrCreateCurrentCycle(DEFAULT_TZ);
         OffsetDateTime now = OffsetDateTime.now(clock);
-
-        cycle.setWindowEndAt(now);
         cycle.setManualClosed(true);
         cycle.setUpdatedBy(actorEmployeeId);
-
         repo.save(cycle);
-        log.info("Submission window closed immediately for cycle: {}", cycle.getCycleKey());
+        
+        log.info("Submission window closed immediately for cycle={}, actor={}", cycle.getCycleKey(), actorEmployeeId);
         return toResponse(cycle, now);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public Map<String, Object> openNowForEmployee(String employeeId, String actorEmployeeId) {
         String id = normalizeEmployeeId(employeeId);
         ensureEmployeeExists(id);
 
-        EmployeeSubmissionWindowOverride override = overrideRepository.findById(id)
+        EmployeeSubmissionWindowOverride override = overrideRepository.findByEmployeeId(id)
                 .orElseGet(EmployeeSubmissionWindowOverride::new);
         override.setEmployeeId(id);
         override.setForceOpen(true);
@@ -142,12 +135,12 @@ public class SubmissionWindowService {
         return getEmployeeWindowStatus(id);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     public Map<String, Object> closeNowForEmployee(String employeeId, String actorEmployeeId) {
         String id = normalizeEmployeeId(employeeId);
         ensureEmployeeExists(id);
 
-        EmployeeSubmissionWindowOverride override = overrideRepository.findById(id)
+        EmployeeSubmissionWindowOverride override = overrideRepository.findByEmployeeId(id)
                 .orElseGet(EmployeeSubmissionWindowOverride::new);
         override.setEmployeeId(id);
         override.setForceOpen(false);

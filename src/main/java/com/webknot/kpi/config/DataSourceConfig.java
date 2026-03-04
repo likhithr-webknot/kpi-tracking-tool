@@ -2,7 +2,6 @@ package com.webknot.kpi.config;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -18,7 +17,7 @@ public class DataSourceConfig {
         this.env = env;
     }
 
-    @Bean
+    @Bean(destroyMethod = "close")
     public DataSource dataSource() {
         HikariConfig config = new HikariConfig();
         
@@ -34,8 +33,8 @@ public class DataSourceConfig {
         config.setIdleTimeout(env.getProperty("spring.datasource.hikari.idle-timeout", Long.class, 600000L));
         config.setMaxLifetime(env.getProperty("spring.datasource.hikari.max-lifetime", Long.class, 1800000L));
         
-        config.setConnectionTestQuery("SELECT 1");
-        config.setAutoCommit(true);
+        config.setConnectionTestQuery(env.getProperty("spring.datasource.hikari.connection-test-query", "SELECT 1"));
+        config.setAutoCommit(env.getProperty("spring.datasource.hikari.auto-commit", Boolean.class, true));
         
         // Connection leak detection - will warn if connections held > 2 minutes
         long leakThresholdMs = env.getProperty("spring.datasource.hikari.leak-detection-threshold", Long.class, 0L);
@@ -44,12 +43,14 @@ public class DataSourceConfig {
         }
         
         // Validate connections periodically
-        config.setValidationTimeout(5000L);
+        config.setValidationTimeout(env.getProperty("spring.datasource.hikari.validation-timeout", Long.class, 5000L));
         
         // Connection eviction
-        config.setKeepaliveTime(300000L); // 5 minutes
-        
-        config.setPoolName("KpiApplicationPool");
+        config.setKeepaliveTime(env.getProperty("spring.datasource.hikari.keepalive-time", Long.class, 300000L));
+
+        config.setInitializationFailTimeout(env.getProperty("spring.datasource.hikari.initialization-fail-timeout", Long.class, 1L));
+        config.setRegisterMbeans(env.getProperty("spring.datasource.hikari.register-mbeans", Boolean.class, true));
+        config.setPoolName(env.getProperty("spring.datasource.hikari.pool-name", "KpiApplicationPool"));
         
         return new HikariDataSource(config);
     }

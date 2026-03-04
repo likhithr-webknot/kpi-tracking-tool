@@ -29,6 +29,9 @@ public class FallbackCacheConfig {
             "stream-directory",
             "employees",
             "employee-by-id",
+            "designation-lookup",
+            "designation-lookups-by-stream",
+            "designation-lookups-by-band",
             "designation-lookups"
         );
     }

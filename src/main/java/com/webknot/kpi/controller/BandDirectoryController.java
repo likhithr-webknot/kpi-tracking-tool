@@ -1,7 +1,10 @@
 package com.webknot.kpi.controller;
 
 import com.webknot.kpi.models.BandDirectory;
+import com.webknot.kpi.models.DesignationLookup;
 import com.webknot.kpi.service.BandDirectoryService;
+import com.webknot.kpi.service.DesignationLookupService;
+import com.webknot.kpi.util.BandStreamNormalizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -12,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/bands")
@@ -19,9 +23,12 @@ public class BandDirectoryController {
 
     private static final Logger log = LoggerFactory.getLogger(BandDirectoryController.class);
     private final BandDirectoryService bandDirectoryService;
+    private final DesignationLookupService designationLookupService;
 
-    public BandDirectoryController(BandDirectoryService bandDirectoryService) {
+    public BandDirectoryController(BandDirectoryService bandDirectoryService, 
+                                   DesignationLookupService designationLookupService) {
         this.bandDirectoryService = bandDirectoryService;
+        this.designationLookupService = designationLookupService;
     }
 
     @GetMapping("/list")
@@ -36,6 +43,27 @@ public class BandDirectoryController {
         } catch (Exception e) {
             log.error("Failed to list band directory with query={}", query, e);
             return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    @GetMapping("/designation")
+    public ResponseEntity<?> getDesignation(@RequestParam String band, @RequestParam String stream) {
+        try {
+            Optional<com.webknot.kpi.models.CurrentBand> parsedBand = BandStreamNormalizer.parseBand(band);
+            if (parsedBand.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Invalid band: " + band));
+            }
+
+            Optional<DesignationLookup> designation = designationLookupService.getByStreamAndBand(stream, parsedBand.get());
+            if (designation.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("error", "Designation not found for band=" + band + ", stream=" + stream));
+            }
+
+            return ResponseEntity.ok(toDesignationResponse(designation.get()));
+        } catch (Exception e) {
+            log.error("Failed to get designation for band={}, stream={}", band, stream, e);
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 
@@ -112,6 +140,14 @@ public class BandDirectoryController {
         );
     }
 
+    private static DesignationResponse toDesignationResponse(DesignationLookup designation) {
+        return new DesignationResponse(
+                designation.getId().getStream(),
+                designation.getId().getBand() != null ? designation.getId().getBand().name() : null,
+                designation.getDesignation()
+        );
+    }
+
     private static void requireAdmin(Authentication authentication) {
         boolean isAdmin = authentication != null && authentication.getAuthorities() != null
                 && authentication.getAuthorities().stream()
@@ -168,6 +204,13 @@ public class BandDirectoryController {
             Integer sortOrder,
             java.time.LocalDateTime createdAt,
             java.time.LocalDateTime updatedAt
+    ) {
+    }
+
+    public record DesignationResponse(
+            String stream,
+            String band,
+            String designation
     ) {
     }
 

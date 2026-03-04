@@ -25,17 +25,15 @@ public class RedisService {
             return false;
         }
         try {
-            var connection = redisTemplate.get().getConnectionFactory().getConnection();
-            if (connection != null) {
-                try {
-                    connection.ping();
-                    log.info("Redis is available");
-                    return true;
-                } finally {
-                    connection.close();
-                }
+            var connectionFactory = redisTemplate.get().getConnectionFactory();
+            if (connectionFactory == null) {
+                return false;
             }
-            return false;
+            try (var connection = connectionFactory.getConnection()) {
+                connection.ping();
+                log.info("Redis is available");
+                return true;
+            }
         } catch (Exception e) {
             log.warn("Redis is not available: {}", e.getMessage());
             return false;

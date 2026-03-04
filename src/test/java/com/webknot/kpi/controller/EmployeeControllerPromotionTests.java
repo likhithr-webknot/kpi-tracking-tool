@@ -5,6 +5,10 @@ import com.webknot.kpi.exceptions.CrudValidationException;
 import com.webknot.kpi.models.CurrentBand;
 import com.webknot.kpi.models.Employee;
 import com.webknot.kpi.models.EmployeeRole;
+import com.webknot.kpi.repository.DesignationLookupRepository;
+import com.webknot.kpi.repository.EmployeeRepository;
+import com.webknot.kpi.security.JwtService;
+import com.webknot.kpi.security.TokenBlacklistService;
 import com.webknot.kpi.service.EmployeeService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +33,18 @@ class EmployeeControllerPromotionTests {
 
     @MockitoBean
     private EmployeeService employeeService;
+
+    @MockitoBean
+    private DesignationLookupRepository designationLookupRepository;
+
+    @MockitoBean
+    private JwtService jwtService;
+
+    @MockitoBean
+    private TokenBlacklistService tokenBlacklistService;
+
+    @MockitoBean
+    private EmployeeRepository employeeRepository;
 
     @Test
     void promoteEmployee_returnsUpdatedEmployee() throws Exception {

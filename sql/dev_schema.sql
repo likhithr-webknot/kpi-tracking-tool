@@ -59,9 +59,6 @@ CREATE TABLE IF NOT EXISTS dev.designation_lookup (
   stream varchar(50) NOT NULL,
   band dev.current_band NOT NULL,
   designation varchar(100),
-  designation_titles text,
-  time_period varchar(50),
-  responsibilities text,
   PRIMARY KEY (stream, band)
 );
 

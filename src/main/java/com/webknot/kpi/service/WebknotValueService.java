@@ -22,72 +22,79 @@ public class WebknotValueService {
         this.webknotValueRepository = webknotValueRepository;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 5)
     @Cacheable(value = "webknot-values", unless = "#result == null || #result.items.isEmpty()")
     public CursorPage list(Boolean activeOnly, Integer limit, String cursor) {
         int pageSize = normalizeCursorLimit(limit);
-        Long startAfter = parseCursorId(cursor);
+        Long cursorId = parseCursorId(cursor);
         Pageable pageable = PageRequest.of(0, pageSize + 1);
-        boolean filterActive = activeOnly != null;
-
-        List<WebknotValue> rows;
-        if (filterActive) {
-            boolean active = activeOnly;
-            rows = startAfter == null
-                    ? webknotValueRepository.findByActiveOrderByIdAsc(active, pageable)
-                    : webknotValueRepository.findByActiveAndIdGreaterThanOrderByIdAsc(active, startAfter, pageable);
+        
+        List<WebknotValue> results;
+        if (activeOnly != null && activeOnly) {
+            if (cursorId == null) {
+                results = webknotValueRepository.findByActiveOrderByIdAsc(true, pageable);
+            } else {
+                results = webknotValueRepository.findByActiveAndIdGreaterThanOrderByIdAsc(true, cursorId, pageable);
+            }
         } else {
-            rows = startAfter == null
-                    ? webknotValueRepository.findAllByOrderByIdAsc(pageable)
-                    : webknotValueRepository.findByIdGreaterThanOrderByIdAsc(startAfter, pageable);
+            if (cursorId == null) {
+                results = webknotValueRepository.findAllByOrderByIdAsc(pageable);
+            } else {
+                results = webknotValueRepository.findByIdGreaterThanOrderByIdAsc(cursorId, pageable);
+            }
         }
-
-        boolean hasMore = rows.size() > pageSize;
-        List<WebknotValue> items = hasMore ? rows.subList(0, pageSize) : rows;
-        String nextCursor = hasMore && !items.isEmpty()
-                ? String.valueOf(items.get(items.size() - 1).getId())
-                : null;
-
-        return new CursorPage(List.copyOf(items), nextCursor);
+        
+        boolean hasMore = results.size() > pageSize;
+        List<WebknotValue> items = hasMore ? results.subList(0, pageSize) : results;
+        String nextCursor = hasMore && !items.isEmpty() ? String.valueOf(items.get(items.size() - 1).getId()) : null;
+        
+        return new CursorPage(items, nextCursor);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "webknot-values", allEntries = true)
     public WebknotValue add(String title, String pillar, String description, Boolean active) {
         String normalizedTitle = normalizeTitle(title);
+        
         if (webknotValueRepository.existsByTitleIgnoreCase(normalizedTitle)) {
-            throw new IllegalArgumentException("Webknot value already exists: " + normalizedTitle);
+            throw new IllegalArgumentException("Webknot value with this title already exists: " + normalizedTitle);
         }
-
+        
         WebknotValue value = new WebknotValue();
         value.setTitle(normalizedTitle);
         value.setPillar(clean(pillar));
         value.setDescription(clean(description));
-        value.setActive(active == null || active);
+        value.setActive(active != null ? active : true);
+        
         return webknotValueRepository.save(value);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "webknot-values", allEntries = true)
     public WebknotValue update(Long id, String title, String pillar, String description, Boolean active) {
         WebknotValue value = webknotValueRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Webknot value not found: " + id));
-
-        if (title != null) {
-            String normalizedTitle = normalizeTitle(title);
-            boolean titleChanged = !normalizedTitle.equalsIgnoreCase(value.getTitle());
-            if (titleChanged && webknotValueRepository.existsByTitleIgnoreCase(normalizedTitle)) {
-                throw new IllegalArgumentException("Webknot value already exists: " + normalizedTitle);
+        
+        String normalizedTitle = normalizeTitle(title);
+        
+        // Check if title is being changed and if new title already exists
+        if (!value.getTitle().equalsIgnoreCase(normalizedTitle)) {
+            if (webknotValueRepository.existsByTitleIgnoreCase(normalizedTitle)) {
+                throw new IllegalArgumentException("Webknot value with this title already exists: " + normalizedTitle);
             }
-            value.setTitle(normalizedTitle);
         }
-        if (pillar != null) value.setPillar(clean(pillar));
-        if (description != null) value.setDescription(clean(description));
-        if (active != null) value.setActive(active);
+        
+        value.setTitle(normalizedTitle);
+        value.setPillar(clean(pillar));
+        value.setDescription(clean(description));
+        if (active != null) {
+            value.setActive(active);
+        }
+        
         return webknotValueRepository.save(value);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "webknot-values", allEntries = true)
     public void delete(Long id) {
         if (!webknotValueRepository.existsById(id)) {

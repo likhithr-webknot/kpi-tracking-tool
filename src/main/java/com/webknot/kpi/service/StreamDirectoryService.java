@@ -27,67 +27,80 @@ public class StreamDirectoryService {
         this.streamDirectoryRepository = streamDirectoryRepository;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 5)
     @Cacheable(value = "stream-directory", unless = "#result == null || #result.items.isEmpty()")
     public CursorPage list(Boolean activeOnly, Integer limit, String cursor) {
         int pageSize = normalizeLimit(limit);
         int offset = parseOffset(cursor);
-        boolean active = Boolean.TRUE.equals(activeOnly);
-
-        List<StreamDirectory> sorted = streamDirectoryRepository.findAll().stream()
-                .filter(row -> !active || row.isActive())
-                .sorted(Comparator
-                        .comparing(StreamDirectory::getSortOrder, Comparator.nullsLast(Integer::compareTo))
-                        .thenComparing(row -> row.getCode() == null ? "" : row.getCode().name()))
-                .toList();
-
-        int safeOffset = Math.min(offset, sorted.size());
-        int end = Math.min(safeOffset + pageSize, sorted.size());
-        List<StreamDirectory> items = sorted.subList(safeOffset, end);
-        String nextCursor = end < sorted.size() ? String.valueOf(end) : null;
-        return new CursorPage(List.copyOf(items), nextCursor);
+        
+        List<StreamDirectory> all = activeOnly != null && activeOnly 
+            ? streamDirectoryRepository.findAll().stream().filter(StreamDirectory::isActive).toList()
+            : streamDirectoryRepository.findAll();
+        
+        List<StreamDirectory> sorted = all.stream()
+            .sorted(Comparator.comparing(StreamDirectory::getSortOrder, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(sd -> sd.getCode().name()))
+            .skip(offset)
+            .limit(pageSize + 1)
+            .toList();
+        
+        boolean hasMore = sorted.size() > pageSize;
+        List<StreamDirectory> items = hasMore ? sorted.subList(0, pageSize) : sorted;
+        String nextCursor = hasMore ? String.valueOf(offset + pageSize) : null;
+        
+        return new CursorPage(items, nextCursor);
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "stream-directory", allEntries = true)
     public StreamDirectory add(String code, String label, Boolean active, Integer sortOrder) {
         CurrentStream parsedCode = parseStreamCode(code);
+        
         if (streamDirectoryRepository.existsById(parsedCode)) {
             throw new IllegalArgumentException("Stream already exists: " + parsedCode.name());
         }
-        StreamDirectory row = new StreamDirectory();
-        row.setCode(parsedCode);
-        row.setLabel(firstNonBlank(label, parsedCode.name()));
-        row.setActive(active == null || active);
-        row.setSortOrder(sortOrder != null ? sortOrder : parsedCode.ordinal());
-        StreamDirectory saved = streamDirectoryRepository.save(row);
-        log.info("Stream directory row created code={}", parsedCode.name());
+        
+        String finalLabel = firstNonBlank(label, parsedCode.name());
+        if (finalLabel == null || finalLabel.isBlank()) {
+            throw new IllegalArgumentException("Stream label is required");
+        }
+        
+        StreamDirectory streamDirectory = new StreamDirectory();
+        streamDirectory.setCode(parsedCode);
+        streamDirectory.setLabel(finalLabel);
+        streamDirectory.setActive(active != null ? active : true);
+        streamDirectory.setSortOrder(sortOrder);
+        
+        StreamDirectory saved = streamDirectoryRepository.save(streamDirectory);
+        log.info("Stream directory row added code={} label={}", parsedCode.name(), finalLabel);
         return saved;
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "stream-directory", allEntries = true)
     public StreamDirectory update(String code, String label, Boolean active, Integer sortOrder) {
         CurrentStream parsedCode = parseStreamCode(code);
-        StreamDirectory existing = streamDirectoryRepository.findById(parsedCode)
+        
+        StreamDirectory streamDirectory = streamDirectoryRepository.findById(parsedCode)
                 .orElseThrow(() -> new IllegalArgumentException("Stream not found: " + parsedCode.name()));
-
-        if (label != null) {
-            existing.setLabel(firstNonBlank(label, existing.getLabel(), parsedCode.name()));
+        
+        String finalLabel = firstNonBlank(label, streamDirectory.getLabel());
+        if (finalLabel == null || finalLabel.isBlank()) {
+            throw new IllegalArgumentException("Stream label is required");
         }
+        
+        streamDirectory.setLabel(finalLabel);
         if (active != null) {
-            existing.setActive(active);
+            streamDirectory.setActive(active);
         }
-        if (sortOrder != null) {
-            existing.setSortOrder(sortOrder);
-        }
-
-        StreamDirectory saved = streamDirectoryRepository.save(existing);
-        log.info("Stream directory row updated code={}", parsedCode.name());
+        streamDirectory.setSortOrder(sortOrder);
+        
+        StreamDirectory saved = streamDirectoryRepository.save(streamDirectory);
+        log.info("Stream directory row updated code={} label={}", parsedCode.name(), finalLabel);
         return saved;
     }
 
-    @Transactional
+    @Transactional(timeout = 10)
     @CacheEvict(value = "stream-directory", allEntries = true)
     public void delete(String code) {
         CurrentStream parsedCode = parseStreamCode(code);

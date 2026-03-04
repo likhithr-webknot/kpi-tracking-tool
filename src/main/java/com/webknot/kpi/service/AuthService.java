@@ -67,16 +67,14 @@ public class AuthService {
             return false;
         }
         try {
-            var connection = redisTemplate.get().getConnectionFactory().getConnection();
-            if (connection != null) {
-                try {
-                    connection.ping();
-                    return true;
-                } finally {
-                    connection.close();
-                }
+            var connectionFactory = redisTemplate.get().getConnectionFactory();
+            if (connectionFactory == null) {
+                return false;
             }
-            return false;
+            try (var connection = connectionFactory.getConnection()) {
+                connection.ping();
+                return true;
+            }
         } catch (Exception e) {
             return false;
         }
@@ -107,6 +105,8 @@ public class AuthService {
     }
 
     public ForgotPasswordResult forgotPassword(String email) {
+        purgeExpiredResetRequests();
+
         Employee employee = employeeRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("No user found with this email"));
         var admins = employeeRepository.findByEmpRole(EmployeeRole.Admin);
@@ -156,6 +156,8 @@ public class AuthService {
     }
 
     public void adminResetPassword(String actorEmail, String requestId, String adminCode, String newPassword) {
+        purgeExpiredResetRequests();
+
         Employee admin = employeeRepository.findByEmail(actorEmail)
                 .orElseThrow(() -> new IllegalArgumentException("Unauthorized"));
         if (admin.getEmpRole() != EmployeeRole.Admin) {
@@ -208,6 +210,7 @@ public class AuthService {
         employee.setPassword(passwordEncoder.encode(newPassword));
         employeeRepository.save(employee);
         adminResetRequests.remove(normalizedRequestId);
+        redisTemplate.ifPresent(rt -> rt.delete(RESET_REQUEST_PREFIX + normalizedRequestId));
         log.info(
                 "Password reset successful for email={} by admin={} using requestId={}",
                 employee.getEmail(),
@@ -216,7 +219,7 @@ public class AuthService {
         );
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 10)
     public MeResponse getCurrentUser(String email) {
         Employee employee = employeeRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
@@ -275,6 +278,14 @@ public class AuthService {
     private String generateAdminCode() {
         int value = secureRandom.nextInt(900_000) + 100_000;
         return String.valueOf(value);
+    }
+
+    private void purgeExpiredResetRequests() {
+        Instant now = Instant.now();
+        adminResetRequests.entrySet().removeIf(entry -> {
+            AdminResetRequestData data = entry.getValue();
+            return data == null || data.expiresAt().isBefore(now);
+        });
     }
 
     private record AdminResetRequestData(String email, String adminCodeHash, Instant expiresAt) {}

@@ -118,6 +118,15 @@ public class RedisConfig {
                 .withCacheConfiguration("designation-lookups",
                     RedisCacheConfiguration.defaultCacheConfig()
                         .entryTtl(Duration.ofHours(1)))
+                .withCacheConfiguration("designation-lookup",
+                    RedisCacheConfiguration.defaultCacheConfig()
+                        .entryTtl(Duration.ofHours(1)))
+                .withCacheConfiguration("designation-lookups-by-stream",
+                    RedisCacheConfiguration.defaultCacheConfig()
+                        .entryTtl(Duration.ofHours(1)))
+                .withCacheConfiguration("designation-lookups-by-band",
+                    RedisCacheConfiguration.defaultCacheConfig()
+                        .entryTtl(Duration.ofHours(1)))
                 .build();
     }
 }
